@@ -62,7 +62,36 @@ logger = logging.getLogger(__name__)
 
 TRANSCRIPT_CACHE_SCHEMA_VERSION = 2
 
-VALID_OUTPUT_FORMATS = {"vertical", "vertical_pan", "vertical_split", "original"}
+VALID_OUTPUT_FORMATS = {
+    "vertical",
+    "vertical_pan",
+    "vertical_split",
+    "vertical_gameplay",
+    "original",
+}
+
+
+def normalize_webcam_region(value: Any) -> Optional[Dict[str, float]]:
+    """Validate a user-picked facecam box given as 0-1 fractions of the frame.
+
+    Returns {"x", "y", "w", "h"} clamped inside the frame, or None when the
+    value is missing or unusable (the renderer then auto-detects the face).
+    """
+    if not isinstance(value, dict):
+        return None
+    try:
+        x, y, w, h = (float(value[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(v == v and abs(v) != float("inf") for v in (x, y, w, h)):
+        return None
+    x = min(max(x, 0.0), 1.0)
+    y = min(max(y, 0.0), 1.0)
+    w = min(max(w, 0.0), 1.0 - x)
+    h = min(max(h, 0.0), 1.0 - y)
+    if w < 0.03 or h < 0.03:
+        return None
+    return {"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)}
 
 EMOJI_FONT_NAME = "Noto Color Emoji"
 

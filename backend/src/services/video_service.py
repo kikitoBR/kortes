@@ -232,6 +232,7 @@ class VideoService:
         output_format: str = "vertical",
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        webcam_region: Optional[Dict[str, float]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Create standalone video clips from segments with optional subtitles.
@@ -255,6 +256,7 @@ class VideoService:
             output_format,
             add_subtitles,
             cleanup_settings,
+            webcam_region=webcam_region,
         )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
@@ -273,6 +275,7 @@ class VideoService:
         output_format: str = "vertical",
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        webcam_region: Optional[Dict[str, float]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure."""
         try:
@@ -340,6 +343,7 @@ class VideoService:
                 output_format,
                 keep_ranges,
                 segment.get("hook_title"),
+                webcam_region=webcam_region,
             )
 
             if not success:

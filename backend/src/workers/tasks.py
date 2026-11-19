@@ -33,6 +33,7 @@ async def process_video_task(
     add_subtitles: bool = True,
     cleanup_settings: Dict[str, Any] | None = None,
     clip_duration: Optional[str] = "auto",
+    webcam_region: Dict[str, float] | None = None,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -51,6 +52,7 @@ async def process_video_task(
         Dict with processing results
     """
     from ..database import AsyncSessionLocal
+    from ..media.common import normalize_webcam_region
     from ..runtime_settings import load_runtime_settings_cache
     from ..services.task_service import TaskService
     from ..workers.progress import ProgressTracker
@@ -100,6 +102,7 @@ async def process_video_task(
                 should_cancel=should_cancel,
                 clip_ready_callback=clip_ready_callback,
                 cleanup_settings=cleanup_settings,
+                webcam_region=normalize_webcam_region(webcam_region),
             )
 
             logger.info(f"Task {task_id} completed successfully")

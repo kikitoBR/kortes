@@ -31,6 +31,7 @@ import { buildFontOptionsPayload, FONT_TEMPLATE_DEFAULT_VALUE } from "@/lib/font
 import { fetchGenerations, greeting, type GenerationSummary } from "@/lib/generations";
 import { cn } from "@/lib/utils";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
+import { WebcamRegionPicker, type WebcamRegion } from "@/components/webcam-region-picker";
 
 interface CaptionTemplate {
   id: string;
@@ -42,12 +43,13 @@ interface CaptionTemplate {
   font_color?: string;
 }
 
-type OutputFormat = "vertical" | "vertical_pan" | "vertical_split" | "original";
+type OutputFormat = "vertical" | "vertical_pan" | "vertical_split" | "vertical_gameplay" | "original";
 
 const FRAMINGS: { id: OutputFormat; label: string; hint: string }[] = [
   { id: "vertical", label: "Auto 9:16", hint: "Corte vertical com rastreamento facial" },
   { id: "vertical_pan", label: "Seguir orador", hint: "Acompanha quem estiver falando" },
   { id: "vertical_split", label: "Tela dividida", hint: "Dois oradores empilhados" },
+  { id: "vertical_gameplay", label: "Gameplay", hint: "Webcam em cima, jogo embaixo" },
   { id: "original", label: "Original", hint: "Manter proporção original do vídeo" },
 ];
 
@@ -93,6 +95,7 @@ export default function HomeApp() {
   const [availableTemplates, setAvailableTemplates] = useState<CaptionTemplate[]>([]);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("vertical");
   const [clipDuration, setClipDuration] = useState<ClipDuration>("auto");
+  const [webcamRegion, setWebcamRegion] = useState<WebcamRegion | null>(null);
   const [addSubtitles, setAddSubtitles] = useState(true);
   const [cutLongPauses, setCutLongPauses] = useState(true);
   const [pauseThresholdMs, setPauseThresholdMs] = useState("700");
@@ -108,6 +111,13 @@ export default function HomeApp() {
     setUpgradeReason(reason);
   }, []);
   const youtubeThumbnailUrl = sourceType === "youtube" ? getYouTubeThumbnailUrl(url) : null;
+  // Full-frame 16:9 still (hqdefault is letterboxed 4:3) for marking the webcam.
+  const youtubeFrameUrl = youtubeThumbnailUrl?.replace("hqdefault", "maxresdefault") ?? null;
+
+  // A marked webcam belongs to one source video.
+  useEffect(() => {
+    setWebcamRegion(null);
+  }, [youtubeFrameUrl, file]);
 
   const refreshFonts = useCallback(async () => {
     try {
@@ -258,6 +268,7 @@ export default function HomeApp() {
           remove_filler_words: removeFillerWords,
           filtered_words: normalizedFilteredWords,
           clip_duration: clipDuration,
+          webcam_region: outputFormat === "vertical_gameplay" ? webcamRegion : null,
         }),
       });
 
@@ -536,6 +547,17 @@ export default function HomeApp() {
                       </button>
                     ))}
                   </div>
+                  {outputFormat === "vertical_gameplay" ? (
+                    <div className="mt-3 border-t pt-3">
+                      <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Posição da webcam</p>
+                      <WebcamRegionPicker
+                        imageSrc={sourceType === "youtube" ? youtubeFrameUrl : null}
+                        videoFile={sourceType === "upload" ? file : null}
+                        value={webcamRegion}
+                        onChange={setWebcamRegion}
+                      />
+                    </div>
+                  ) : null}
                 </PopoverContent>
               </Popover>
 
@@ -732,6 +754,8 @@ function FramingGlyph({ kind }: { kind: OutputFormat }) {
     <span className="flex h-12 items-center justify-center rounded-lg bg-muted" aria-hidden>
       {kind === "original" ? (
         <span className="h-6 w-10 rounded-[3px] border-2 border-foreground/70" />
+      ) : kind === "vertical_gameplay" ? (
+        <span className="flex h-9 w-5 flex-col gap-0.5 rounded-[3px] border-2 border-foreground/70 p-0.5"><span className="flex basis-2/5 items-center justify-center rounded-[1px] bg-foreground/30"><span className="size-1.5 rounded-full bg-brand" /></span><span className="flex-1 rounded-[1px] bg-foreground/50" /></span>
       ) : kind === "vertical_split" ? (
         <span className="flex h-9 w-5 flex-col gap-0.5 rounded-[3px] border-2 border-foreground/70 p-0.5"><span className="flex-1 rounded-[1px] bg-foreground/30" /><span className="flex-1 rounded-[1px] bg-foreground/30" /></span>
       ) : (

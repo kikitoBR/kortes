@@ -675,6 +675,132 @@ def detect_speaker_reframe_plan(
         return None
 
 
+# Gameplay layout: facecam stacked on top of the cropped game (both 1080 wide).
+GAMEPLAY_CAM_H = 768
+GAMEPLAY_GAME_H = 1920 - GAMEPLAY_CAM_H
+
+
+def compute_gameplay_regions(
+    width: int,
+    height: int,
+    face_centers: List[Tuple[int, int, int, float]],
+) -> Optional[Dict[str, Dict[str, int]]]:
+    """Locate the streamer's facecam and the game crop in a landscape frame.
+
+    The facecam box is grown around the median detected face so it matches the
+    top tile's aspect (head and shoulders, face slightly above centre). The game
+    crop is a full-height centre cut matching the bottom tile's aspect.
+    """
+    if width <= 0 or height <= 0 or width / height <= 1.2:
+        return None
+    if len(face_centers) < 3:
+        return None
+
+    cx = float(np.median([f[0] for f in face_centers]))
+    cy = float(np.median([f[1] for f in face_centers]))
+    face_size = float(np.sqrt(max(1.0, float(np.median([f[2] for f in face_centers])))))
+
+    cam_aspect = 1080 / GAMEPLAY_CAM_H
+    cam_w = max(face_size * 3.4, width * 0.18)
+    cam_w = min(cam_w, width * 0.6)
+    cam_h = cam_w / cam_aspect
+    if cam_h > height:
+        cam_h = float(height)
+        cam_w = cam_h * cam_aspect
+    cam_w_i = max(2, round_to_even(int(cam_w)))
+    cam_h_i = max(2, min(round_to_even(height), round_to_even(int(cam_w_i / cam_aspect))))
+    cam_x = clamp_even(int(cx - cam_w_i / 2), 0, max(0, width - cam_w_i))
+    cam_y = clamp_even(int(cy - cam_h_i * 0.45), 0, max(0, height - cam_h_i))
+
+    return {
+        "cam": {"x": cam_x, "y": cam_y, "w": cam_w_i, "h": cam_h_i},
+        "game": _gameplay_game_crop(width, height),
+    }
+
+
+def _gameplay_game_crop(width: int, height: int) -> Dict[str, int]:
+    """Full-height centre cut matching the bottom tile's aspect."""
+    game_aspect = 1080 / GAMEPLAY_GAME_H
+    game_h = round_to_even(height)
+    game_w = round_to_even(int(game_h * game_aspect))
+    if game_w > width:
+        game_w = round_to_even(width)
+        game_h = round_to_even(int(game_w / game_aspect))
+    game_x = clamp_even((width - game_w) // 2, 0, max(0, width - game_w))
+    game_y = clamp_even((height - game_h) // 2, 0, max(0, height - game_h))
+    return {"x": game_x, "y": game_y, "w": game_w, "h": game_h}
+
+
+def gameplay_regions_from_box(
+    width: int, height: int, box: Dict[str, float]
+) -> Optional[Dict[str, Dict[str, int]]]:
+    """Gameplay regions from a user-picked facecam box (0-1 fractions).
+
+    The box is cover-fitted to the top tile's aspect around its centre, so the
+    facecam fills the tile without stretching or pulling in game pixels.
+    """
+    if width <= 0 or height <= 0:
+        return None
+    bx, by = box["x"] * width, box["y"] * height
+    bw, bh = box["w"] * width, box["h"] * height
+    if bw < 16 or bh < 16:
+        return None
+    cam_aspect = 1080 / GAMEPLAY_CAM_H
+    if bw / bh > cam_aspect:
+        cw, ch = bh * cam_aspect, bh
+    else:
+        cw, ch = bw, bw / cam_aspect
+    cw_i = max(2, min(round_to_even(int(cw)), round_to_even(width)))
+    ch_i = max(2, min(round_to_even(int(cw_i / cam_aspect)), round_to_even(height)))
+    cx, cy = bx + bw / 2, by + bh / 2
+    return {
+        "cam": {
+            "x": clamp_even(int(cx - cw_i / 2), 0, max(0, width - cw_i)),
+            "y": clamp_even(int(cy - ch_i / 2), 0, max(0, height - ch_i)),
+            "w": cw_i,
+            "h": ch_i,
+        },
+        "game": _gameplay_game_crop(width, height),
+    }
+
+
+def detect_gameplay_plan(
+    clip_path: Path, webcam_region: Optional[Dict[str, float]] = None
+) -> Optional[Dict[str, Dict[str, int]]]:
+    """Facecam + game crop for a landscape gameplay clip; None if not found.
+
+    A user-picked ``webcam_region`` wins; otherwise the face is detected.
+    """
+    try:
+        width, height = ffprobe_video_size(clip_path)
+        if width / max(height, 1) <= 1.2:
+            return None
+        if webcam_region:
+            regions = gameplay_regions_from_box(width, height, webcam_region)
+            if regions:
+                return regions
+        duration = ffprobe_duration(clip_path)
+        faces = detect_faces_in_clip(clip_path, 0, min(duration, 12.0))
+        return compute_gameplay_regions(width, height, faces)
+    except Exception as exc:
+        logger.warning("Gameplay layout planning failed: %s", exc)
+        return None
+
+
+def build_gameplay_filter(regions: Dict[str, Dict[str, int]], subs: Optional[str]) -> str:
+    cam = regions["cam"]
+    game = regions["game"]
+    tail = f",{subs}" if subs else ""
+    return (
+        f"[0:v]split=2[c][g];"
+        f"[c]crop={cam['w']}:{cam['h']}:{cam['x']}:{cam['y']},"
+        f"scale=1080:{GAMEPLAY_CAM_H}:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1[cv];"
+        f"[g]crop={game['w']}:{game['h']}:{game['x']}:{game['y']},"
+        f"scale=1080:{GAMEPLAY_GAME_H}:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1[gv];"
+        f"[cv][gv]vstack,setsar=1{tail}[v]"
+    )
+
+
 def compute_vertical_crop_dims(
     width: int, height: int, target_ratio: float = 9 / 16
 ) -> Tuple[int, int]:
@@ -1250,6 +1376,7 @@ def render_reframed_clip_ffmpeg(
     fonts_dir: Optional[Path] = None,
     speaker_turns: Optional[List[Dict[str, Any]]] = None,
     speaker_words: Optional[List[Dict[str, Any]]] = None,
+    webcam_region: Optional[Dict[str, float]] = None,
 ) -> Tuple[bool, int, int]:
     """Render the final framed clip and (optionally) burn subtitles in one pass.
 
@@ -1281,6 +1408,21 @@ def render_reframed_clip_ffmpeg(
             str(output_path),
         ]
         return run_ffmpeg_command(command).returncode == 0, out_w, out_h
+
+    if output_format == "vertical_gameplay":
+        regions = detect_gameplay_plan(input_path, webcam_region)
+        if regions:
+            command = [
+                "ffmpeg", "-y", "-i", str(input_path),
+                "-filter_complex", build_gameplay_filter(regions, subs),
+                "-map", "[v]", "-map", "0:a?",
+                *build_final_video_encode_args(fps=fps),
+                *audio_args,
+                "-movflags", "+faststart",
+                str(output_path),
+            ]
+            return run_ffmpeg_command(command).returncode == 0, 1080, 1920
+        logger.info("No facecam found for gameplay layout; using default vertical framing")
 
     if output_format == "vertical_pan" and speaker_words:
         speaker_chain = build_diarized_speaker_chain(

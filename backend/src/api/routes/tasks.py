@@ -44,6 +44,7 @@ from ...clip_cleanup import (
     updated_cleanup_settings,
 )
 from ...video_utils import VALID_OUTPUT_FORMATS
+from ...media.common import normalize_webcam_region
 from ...admin_auth import require_admin_user, user_is_admin
 import redis.asyncio as redis
 from ...clip_editor import export_with_preset, EXPORT_PRESETS
@@ -211,6 +212,7 @@ def _merge_task_source_metadata(
     add_subtitles: Any = None,
     cleanup_settings: Dict[str, Any] | None = None,
     clip_duration: Any = None,
+    webcam_region: Dict[str, float] | None = None,
 ) -> Dict[str, Any]:
     merged = dict(existing or {})
 
@@ -226,6 +228,8 @@ def _merge_task_source_metadata(
         merged.update(cleanup_settings)
     if clip_duration in {"short", "medium", "long", "auto"}:
         merged["clip_duration"] = clip_duration
+    if webcam_region:
+        merged["webcam_region"] = webcam_region
 
     return merged
 
@@ -373,6 +377,11 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     if clip_duration not in {"short", "medium", "long", "auto"}:
         clip_duration = "auto"
     cleanup_settings = new_task_cleanup_settings(data)
+    webcam_region = (
+        normalize_webcam_region(data.get("webcam_region"))
+        if output_format == "vertical_gameplay"
+        else None
+    )
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="O link de origem é obrigatório")
 
@@ -420,6 +429,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                         add_subtitles=add_subtitles,
                         cleanup_settings=cleanup_settings,
                         clip_duration=clip_duration,
+                        webcam_region=webcam_region,
                     ),
                     db=db,
                 )
@@ -442,6 +452,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     add_subtitles,
                     cleanup_settings,
                     clip_duration,
+                    webcam_region,
                     _job_id=processing_job_id,
                 )
 
@@ -1274,6 +1285,7 @@ async def resume_task(
                         add_subtitles,
                         cleanup_settings,
                         clip_duration,
+                        normalize_webcam_region(metadata.get("webcam_region")),
                         _job_id=processing_job_id,
                     )
                 except Exception:

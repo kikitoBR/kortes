@@ -261,6 +261,7 @@ def create_optimized_clip(
     keep_ranges: Optional[List[Tuple[float, float]]] = None,
     hook_title: Optional[str] = None,
     extend_to_sentence: bool = True,
+    webcam_region: Optional[Dict[str, float]] = None,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
     try:
@@ -385,6 +386,7 @@ def create_optimized_clip(
                 fonts_dir=fonts_dir,
                 speaker_turns=speaker_turns,
                 speaker_words=speaker_words,
+                webcam_region=webcam_region,
             )
             if not framed_ok:
                 raise RuntimeError("ffmpeg reframe render failed")
@@ -409,6 +411,7 @@ def create_clips_from_segments(
     output_format: str = "vertical",
     add_subtitles: bool = True,
     cleanup_settings: Optional[Dict[str, Any]] = None,
+    webcam_region: Optional[Dict[str, float]] = None,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments with template support."""
     logger.info(
@@ -489,6 +492,7 @@ def create_clips_from_segments(
                 output_format,
                 keep_ranges,
                 hook_title=segment.get("hook_title"),
+                webcam_region=webcam_region,
             )
 
             if success:
@@ -641,6 +645,7 @@ def create_clips_with_transitions(
     output_format: str = "vertical",
     add_subtitles: bool = True,
     cleanup_settings: Optional[Dict[str, Any]] = None,
+    webcam_region: Optional[Dict[str, float]] = None,
 ) -> List[Dict[str, Any]]:
     """Create standalone video clips without inter-clip transitions.
 
@@ -663,6 +668,7 @@ def create_clips_with_transitions(
         output_format,
         add_subtitles,
         cleanup_settings,
+        webcam_region=webcam_region,
     )
 
 

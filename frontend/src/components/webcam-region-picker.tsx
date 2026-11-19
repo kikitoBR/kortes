@@ -9,34 +9,49 @@ export type WebcamRegion = { x: number; y: number; w: number; h: number };
 /** Top tile of the gameplay layout (1080x768): the box keeps this aspect. */
 const CAM_ASPECT = 1080 / 768;
 const MIN_W = 0.06;
+/** Where in the video each frame choice is taken from. */
+const FRAME_POSITIONS = [0.25, 0.5, 0.75];
+const FRAME_LABELS = ["Início", "Meio", "Fim"];
 
 type Drag = { mode: "move" | "resize"; startX: number; startY: number; origin: WebcamRegion };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
+/** YouTube answers a missing maxres still with a 120x90 placeholder or a 404. */
+const fallbackFrame = (src: string) =>
+  src.includes("/maxres") ? src.replace(/\/maxres(\d)\.jpg/, "/mq$1.jpg") : null;
+
 /**
- * Lets the user mark where the streamer's webcam sits on a frame of the
+ * Lets the user mark where the streamer's webcam sits on a real frame of the
  * source video. The box is locked to the gameplay layout's top-tile aspect so
  * what they mark is exactly what ends up on top of the clip.
  */
 export function WebcamRegionPicker({
-  imageSrc,
+  frames,
   videoFile,
   value,
   onChange,
 }: {
-  imageSrc?: string | null;
+  /** Still images of the video (YouTube auto frames). */
+  frames?: string[];
+  /** Local upload; frames are seeked from the file itself. */
   videoFile?: File | null;
   value: WebcamRegion | null;
   onChange: (region: WebcamRegion | null) => void;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const dragRef = useRef<Drag | null>(null);
   const [frameAspect, setFrameAspect] = useState(16 / 9);
-  const [image, setImage] = useState<string | null>(imageSrc ?? null);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [imageSrc, setImageSrc] = useState<string | null>(frames?.[0] ?? null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
-  useEffect(() => setImage(imageSrc ?? null), [imageSrc]);
+  const frameCount = videoFile ? FRAME_POSITIONS.length : frames?.length ?? 0;
+
+  useEffect(() => {
+    setImageSrc(frames?.[frameIndex] ?? null);
+  }, [frames, frameIndex]);
 
   useEffect(() => {
     if (!videoFile) {
@@ -47,6 +62,13 @@ export function WebcamRegionPicker({
     setVideoUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [videoFile]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && Number.isFinite(video.duration)) {
+      video.currentTime = video.duration * FRAME_POSITIONS[frameIndex];
+    }
+  }, [frameIndex]);
 
   // Height fraction that keeps the box at CAM_ASPECT in real pixels.
   const heightFor = (w: number) => (w * frameAspect) / CAM_ASPECT;
@@ -81,7 +103,7 @@ export function WebcamRegionPicker({
   const onFramePointerDown = (event: React.PointerEvent) => {
     // Clicking empty space drops a new box centred on the pointer.
     const { fx, fy } = pointerFraction(event);
-    const w = 0.28;
+    const w = 0.24;
     const next = fit({ x: fx - w / 2, y: fy - heightFor(w) / 2, w, h: heightFor(w) });
     onChange(next);
     startDrag(event, "move", next);
@@ -113,11 +135,15 @@ export function WebcamRegionPicker({
     frameRef.current?.releasePointerCapture?.(event.pointerId);
   };
 
+  const applyFallback = () => {
+    const next = imageSrc ? fallbackFrame(imageSrc) : null;
+    if (next) setImageSrc(next);
+  };
+
   const onImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
     const img = event.currentTarget;
-    // YouTube answers a missing maxres thumbnail with a tiny placeholder.
-    if (img.naturalWidth < 200 && image?.includes("maxresdefault")) {
-      setImage(image.replace("maxresdefault", "mqdefault"));
+    if (img.naturalWidth < 200 && imageSrc && fallbackFrame(imageSrc)) {
+      applyFallback();
       return;
     }
     if (img.naturalWidth && img.naturalHeight) setFrameAspect(img.naturalWidth / img.naturalHeight);
@@ -126,29 +152,41 @@ export function WebcamRegionPicker({
   const onVideoMetadata = (event: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
     if (video.videoWidth && video.videoHeight) setFrameAspect(video.videoWidth / video.videoHeight);
-    if (Number.isFinite(video.duration)) video.currentTime = Math.min(5, video.duration / 3);
+    if (Number.isFinite(video.duration)) video.currentTime = video.duration * FRAME_POSITIONS[frameIndex];
   };
 
-  if (!image && !videoUrl) {
+  if (!imageSrc && !videoUrl) {
     return (
-      <p className="rounded-xl border border-dashed p-3 text-xs text-muted-foreground">
+      <p className="rounded-xl border border-dashed p-3 text-sm text-muted-foreground">
         Cole um link ou envie um vídeo para marcar onde fica a webcam. Sem marcação, ela é detectada pelo rosto.
       </p>
     );
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2 px-1">
-        <p className="text-xs text-muted-foreground">
-          {value ? "Arraste para ajustar a webcam" : "Clique na webcam para marcar (opcional)"}
-        </p>
-        {value ? (
-          <button type="button" onClick={() => onChange(null)} className="text-xs font-medium underline-offset-2 hover:underline">
-            Detectar automaticamente
-          </button>
-        ) : null}
-      </div>
+    <div className="space-y-3">
+      {frameCount > 1 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Quadro do vídeo:</span>
+          <div className="inline-flex rounded-lg border p-0.5" role="radiogroup" aria-label="Quadro do vídeo">
+            {Array.from({ length: frameCount }, (_, i) => (
+              <button
+                key={i}
+                type="button"
+                role="radio"
+                aria-checked={frameIndex === i}
+                onClick={() => setFrameIndex(i)}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs transition-colors",
+                  frameIndex === i ? "bg-foreground text-background" : "hover:bg-accent",
+                )}
+              >
+                {FRAME_LABELS[i] ?? i + 1}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div
         ref={frameRef}
         className="relative w-full cursor-crosshair touch-none select-none overflow-hidden rounded-lg bg-muted"
@@ -159,11 +197,10 @@ export function WebcamRegionPicker({
         onPointerCancel={endDrag}
       >
         {videoUrl ? (
-          <video src={videoUrl} muted playsInline preload="metadata" onLoadedMetadata={onVideoMetadata} className="pointer-events-none absolute inset-0 size-full object-fill" />
-        ) : image ? (
+          <video ref={videoRef} src={videoUrl} muted playsInline preload="auto" onLoadedMetadata={onVideoMetadata} className="pointer-events-none absolute inset-0 size-full object-fill" />
+        ) : imageSrc ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={image} alt="" draggable={false} onLoad={onImageLoad}
-            onError={() => image.includes("maxresdefault") && setImage(image.replace("maxresdefault", "mqdefault"))} className="pointer-events-none absolute inset-0 size-full object-fill" />
+          <img src={imageSrc} alt="" draggable={false} onLoad={onImageLoad} onError={applyFallback} className="pointer-events-none absolute inset-0 size-full object-fill" />
         ) : null}
         {value ? (
           <div
@@ -189,11 +226,16 @@ export function WebcamRegionPicker({
             <span
               aria-hidden
               onPointerDown={(event) => startDrag(event, "resize", value)}
-              className={cn("absolute -bottom-1.5 -right-1.5 size-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-brand")}
+              className="absolute -bottom-2 -right-2 size-4 cursor-nwse-resize rounded-full border-2 border-white bg-brand"
             />
           </div>
         ) : null}
       </div>
+      <p className="text-xs text-muted-foreground">
+        {value
+          ? "Arraste a caixa para mover e a bolinha para redimensionar. O que está dentro dela vai para a parte de cima do clipe."
+          : "Clique em cima da webcam para marcar. Se a webcam não aparece neste quadro, troque o quadro acima."}
+      </p>
     </div>
   );
 }

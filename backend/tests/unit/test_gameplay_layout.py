@@ -48,6 +48,7 @@ def test_manual_webcam_box_skips_face_detection():
     with (
         patch.object(reframing, "ffprobe_video_size", return_value=(1920, 1080)),
         patch.object(reframing, "detect_faces_in_clip") as detect,
+        patch.object(reframing, "detect_letterbox_rows", return_value=None),
     ):
         regions = reframing.detect_gameplay_plan(Path("in.mp4"), box)
 
@@ -55,6 +56,21 @@ def test_manual_webcam_box_skips_face_detection():
     cam = regions["cam"]
     # 576x324 box, cover-fitted and centred inside it.
     assert cam["y"] == 0 and 0 < cam["x"] and cam["x"] + cam["w"] <= 576
+
+
+def test_letterbox_rows_parsed_from_cropdetect():
+    log = "[Parsed_cropdetect_1] x1:0 x2:1279 y1:40 y2:679 crop=1280:640:0:40\n"
+    assert reframing.parse_letterbox_rows(log, 1280, 720) == (40, 640)
+    # Full frame, pillarbox or a dark scene shrinking the box are ignored.
+    assert reframing.parse_letterbox_rows("crop=1280:720:0:0", 1280, 720) is None
+    assert reframing.parse_letterbox_rows("crop=960:720:160:0", 1280, 720) is None
+    assert reframing.parse_letterbox_rows("crop=1280:300:0:200", 1280, 720) is None
+
+
+def test_game_crop_stays_inside_letterbox():
+    game = reframing._gameplay_game_crop(1280, 720, (40, 640))
+    assert game["y"] >= 40 and game["y"] + game["h"] <= 680
+    assert abs(game["w"] / game["h"] - 1080 / reframing.GAMEPLAY_GAME_H) < 0.01
 
 
 def test_normalize_webcam_region_rejects_bad_input():

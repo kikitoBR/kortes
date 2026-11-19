@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   AlertCircle, ArrowRight, ArrowUp, Captions, CaptionsOff, Check, ChevronDown, Clock, Crop, FileVideo,
   Loader2, Paintbrush, Paperclip, Upload, Wand2, X, Youtube,
 } from "lucide-react";
 import { CaptionSizeControl } from "@/components/caption-size-control";
-import { FONT_SEARCH_THRESHOLD, getYouTubeThumbnailUrl, uploadVideoFile } from "@/lib/video-upload";
+import { FONT_SEARCH_THRESHOLD, getYouTubeFrameUrls, getYouTubeThumbnailUrl, uploadVideoFile } from "@/lib/video-upload";
 import { AppShell } from "@/components/app/app-shell";
 import { GenerationCard } from "@/components/app/generation-card";
 import { VideoDownloadStatus } from "@/components/app/video-download-status";
@@ -19,6 +19,7 @@ import { UpgradeDialog, UpgradeNudge, getUpgradeState, upgradeReasonForError, ty
 import { getPublicBillingPlans } from "@/lib/billing-plans";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Kbd } from "@/components/ui/kbd";
@@ -96,6 +97,7 @@ export default function HomeApp() {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("vertical");
   const [clipDuration, setClipDuration] = useState<ClipDuration>("auto");
   const [webcamRegion, setWebcamRegion] = useState<WebcamRegion | null>(null);
+  const [webcamDialogOpen, setWebcamDialogOpen] = useState(false);
   const [addSubtitles, setAddSubtitles] = useState(true);
   const [cutLongPauses, setCutLongPauses] = useState(true);
   const [pauseThresholdMs, setPauseThresholdMs] = useState("700");
@@ -111,13 +113,14 @@ export default function HomeApp() {
     setUpgradeReason(reason);
   }, []);
   const youtubeThumbnailUrl = sourceType === "youtube" ? getYouTubeThumbnailUrl(url) : null;
-  // Full-frame 16:9 still (hqdefault is letterboxed 4:3) for marking the webcam.
-  const youtubeFrameUrl = youtubeThumbnailUrl?.replace("hqdefault", "maxresdefault") ?? null;
+  // Real video stills (not the custom cover) for marking the webcam.
+  const youtubeFramesKey = sourceType === "youtube" ? getYouTubeFrameUrls(url).join("|") : "";
+  const youtubeFrames = useMemo(() => (youtubeFramesKey ? youtubeFramesKey.split("|") : []), [youtubeFramesKey]);
 
   // A marked webcam belongs to one source video.
   useEffect(() => {
     setWebcamRegion(null);
-  }, [youtubeFrameUrl, file]);
+  }, [youtubeFramesKey, file]);
 
   const refreshFonts = useCallback(async () => {
     try {
@@ -529,7 +532,11 @@ export default function HomeApp() {
                     <Crop className="size-3.5" />{FRAMINGS.find((f) => f.id === outputFormat)?.label}<ChevronDown className="size-3 opacity-60" />
                   </Chip>
                 </PopoverTrigger>
-                <PopoverContent align="start" className="w-[min(92vw,420px)] rounded-2xl p-3">
+                <PopoverContent
+                  align="start"
+                  collisionPadding={12}
+                  className="max-h-[var(--radix-popover-content-available-height)] w-[min(92vw,420px)] overflow-y-auto overscroll-contain rounded-2xl p-3"
+                >
                   <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Enquadramento</p>
                   <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Enquadramento">
                     {FRAMINGS.map((framing) => (
@@ -548,18 +555,59 @@ export default function HomeApp() {
                     ))}
                   </div>
                   {outputFormat === "vertical_gameplay" ? (
-                    <div className="mt-3 border-t pt-3">
-                      <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Posição da webcam</p>
-                      <WebcamRegionPicker
-                        imageSrc={sourceType === "youtube" ? youtubeFrameUrl : null}
-                        videoFile={sourceType === "upload" ? file : null}
-                        value={webcamRegion}
-                        onChange={setWebcamRegion}
-                      />
+                    <div className="mt-3 flex items-center justify-between gap-3 border-t px-1 pt-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">Posição da webcam</p>
+                        <p className="text-xs text-muted-foreground">
+                          {webcamRegion ? "Marcada manualmente" : "Detectada pelo rosto"}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {webcamRegion ? (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setWebcamRegion(null)}>
+                            Automático
+                          </Button>
+                        ) : null}
+                        <Button type="button" variant="outline" size="sm" disabled={!hasSource} onClick={() => setWebcamDialogOpen(true)}>
+                          {webcamRegion ? "Ajustar" : "Marcar webcam"}
+                        </Button>
+                      </div>
                     </div>
                   ) : null}
                 </PopoverContent>
               </Popover>
+
+              <Dialog open={webcamDialogOpen} onOpenChange={setWebcamDialogOpen}>
+                <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Onde fica a webcam?</DialogTitle>
+                    <DialogDescription>
+                      A área marcada vai para a parte de cima do clipe e o jogo fica embaixo.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <WebcamRegionPicker
+                    frames={sourceType === "youtube" ? youtubeFrames : undefined}
+                    videoFile={sourceType === "upload" ? file : null}
+                    value={webcamRegion}
+                    onChange={setWebcamRegion}
+                  />
+                  <DialogFooter>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setWebcamRegion(null);
+                        setWebcamDialogOpen(false);
+                      }}
+                    >
+                      Usar detecção automática
+                    </Button>
+                    <Button type="button" onClick={() => setWebcamDialogOpen(false)}>
+                      Concluir
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
               <Popover>
                 <PopoverTrigger asChild>

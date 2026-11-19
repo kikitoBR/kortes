@@ -718,17 +718,62 @@ def compute_gameplay_regions(
     }
 
 
-def _gameplay_game_crop(width: int, height: int) -> Dict[str, int]:
-    """Full-height centre cut matching the bottom tile's aspect."""
+def _gameplay_game_crop(
+    width: int, height: int, content_rows: Optional[Tuple[int, int]] = None
+) -> Dict[str, int]:
+    """Centre cut matching the bottom tile's aspect.
+
+    ``content_rows`` = (top, height) of the picture inside letterbox bars; the
+    cut then spans only those rows so the bars never reach the clip.
+    """
+    top, rows = content_rows if content_rows else (0, height)
     game_aspect = 1080 / GAMEPLAY_GAME_H
-    game_h = round_to_even(height)
+    game_h = round_to_even(rows)
     game_w = round_to_even(int(game_h * game_aspect))
     if game_w > width:
         game_w = round_to_even(width)
         game_h = round_to_even(int(game_w / game_aspect))
     game_x = clamp_even((width - game_w) // 2, 0, max(0, width - game_w))
-    game_y = clamp_even((height - game_h) // 2, 0, max(0, height - game_h))
+    game_y = clamp_even(top + (rows - game_h) // 2, 0, max(0, height - game_h))
     return {"x": game_x, "y": game_y, "w": game_w, "h": game_h}
+
+
+_CROPDETECT_RE = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
+
+
+def parse_letterbox_rows(
+    cropdetect_log: str, width: int, height: int
+) -> Optional[Tuple[int, int]]:
+    """(top, rows) of the picture between horizontal black bars, if any.
+
+    Only plain letterboxing counts: the detected box must span (almost) the
+    full width, trim at least a few rows and keep most of the height.
+    """
+    matches = _CROPDETECT_RE.findall(cropdetect_log or "")
+    if not matches:
+        return None
+    w, h, _x, y = (int(v) for v in matches[-1])
+    if w < width * 0.9 or h >= height - 8 or h < height * 0.6:
+        return None
+    return y, h
+
+
+def detect_letterbox_rows(clip_path: Path, width: int, height: int) -> Optional[Tuple[int, int]]:
+    try:
+        result = run_ffmpeg_command(
+            [
+                "ffmpeg", "-hide_banner", "-t", "12", "-i", str(clip_path),
+                "-vf", "fps=2,cropdetect=limit=24:round=2:reset=0",
+                "-an", "-f", "null", "-",
+            ],
+            timeout=120,
+        )
+        if result.returncode != 0:
+            return None
+        return parse_letterbox_rows(result.stderr, width, height)
+    except Exception as exc:
+        logger.debug("Letterbox detection failed: %s", exc)
+        return None
 
 
 def gameplay_regions_from_box(
@@ -775,13 +820,20 @@ def detect_gameplay_plan(
         width, height = ffprobe_video_size(clip_path)
         if width / max(height, 1) <= 1.2:
             return None
-        if webcam_region:
-            regions = gameplay_regions_from_box(width, height, webcam_region)
-            if regions:
-                return regions
-        duration = ffprobe_duration(clip_path)
-        faces = detect_faces_in_clip(clip_path, 0, min(duration, 12.0))
-        return compute_gameplay_regions(width, height, faces)
+        regions = (
+            gameplay_regions_from_box(width, height, webcam_region)
+            if webcam_region
+            else None
+        )
+        if not regions:
+            duration = ffprobe_duration(clip_path)
+            faces = detect_faces_in_clip(clip_path, 0, min(duration, 12.0))
+            regions = compute_gameplay_regions(width, height, faces)
+        if regions:
+            rows = detect_letterbox_rows(clip_path, width, height)
+            if rows:
+                regions["game"] = _gameplay_game_crop(width, height, rows)
+        return regions
     except Exception as exc:
         logger.warning("Gameplay layout planning failed: %s", exc)
         return None

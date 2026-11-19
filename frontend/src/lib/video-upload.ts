@@ -63,6 +63,16 @@ export const getYouTubeThumbnailUrl = (value: string): string | null => {
   return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null;
 };
 
+/**
+ * Real video stills YouTube auto-generates at ~25%, 50% and 75% of the video
+ * (16:9, unlike the uploader's custom cover). Callers fall back from
+ * `maxresN` to the always-present 320x180 `mqN` when the large one is missing.
+ */
+export const getYouTubeFrameUrls = (value: string): string[] => {
+  const videoId = extractYouTubeVideoId(value);
+  return videoId ? [1, 2, 3].map((n) => `https://i.ytimg.com/vi/${videoId}/maxres${n}.jpg`) : [];
+};
+
 async function requestUploadAuthorization(file: File): Promise<UploadAuthorization> {
   const response = await fetch("/api/upload/authorization", {
     method: "POST",

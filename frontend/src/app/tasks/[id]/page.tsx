@@ -61,6 +61,7 @@ import { timeAgo } from "@/lib/generations";
 import { cn } from "@/lib/utils";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 import { ClipPostList, ClipPublishButton, useSocialPostToasts } from "@/components/clip-publisher";
+import { ClipCoverButton, ClipPostTextsButton } from "@/components/clip-extras";
 import {
   ACTIVE_POST_STATUSES,
   type SocialConnection,
@@ -812,13 +813,17 @@ export default function TaskPage() {
         onDelete={readOnly ? undefined : () => { if (focusedClip) { setDeletingClipId(focusedClip.id); setFocusIndex(null); } }}
         hookTypeLabel={getHookTypeLabel}
         actions={focusedClip && task?.status === "completed" ? (
-          <ClipPublishButton
-            taskId={task.id}
-            clip={focusedClip}
-            connections={socialConnections}
-            providers={socialProviders}
-            onChanged={loadSocialPosts}
-          />
+          <>
+            <ClipCoverButton taskId={task.id} clip={focusedClip} />
+            {!readOnly && <ClipPostTextsButton taskId={task.id} clip={focusedClip} />}
+            <ClipPublishButton
+              taskId={task.id}
+              clip={focusedClip}
+              connections={socialConnections}
+              providers={socialProviders}
+              onChanged={loadSocialPosts}
+            />
+          </>
         ) : null}
       >
         {focusedClip && (

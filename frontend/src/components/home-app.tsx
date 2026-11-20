@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   AlertCircle, ArrowRight, ArrowUp, Captions, CaptionsOff, Check, ChevronDown, Clock, Crop, FileVideo,
-  Loader2, Paintbrush, Paperclip, Upload, Wand2, X, Youtube,
+  Loader2, Paintbrush, Paperclip, Rewind, Upload, Wand2, X, Youtube,
 } from "lucide-react";
 import { CaptionSizeControl } from "@/components/caption-size-control";
 import { FONT_SEARCH_THRESHOLD, getYouTubeFrameUrls, getYouTubeThumbnailUrl, uploadVideoFile } from "@/lib/video-upload";
@@ -99,6 +99,7 @@ export default function HomeApp() {
   const [webcamRegion, setWebcamRegion] = useState<WebcamRegion | null>(null);
   const [webcamDialogOpen, setWebcamDialogOpen] = useState(false);
   const [addSubtitles, setAddSubtitles] = useState(true);
+  const [hookIntro, setHookIntro] = useState(false);
   const [cutLongPauses, setCutLongPauses] = useState(true);
   const [pauseThresholdMs, setPauseThresholdMs] = useState("700");
   const [removeFillerWords, setRemoveFillerWords] = useState(true);
@@ -272,6 +273,7 @@ export default function HomeApp() {
           filtered_words: normalizedFilteredWords,
           clip_duration: clipDuration,
           webcam_region: outputFormat === "vertical_gameplay" ? webcamRegion : null,
+          hook_intro: hookIntro,
         }),
       });
 
@@ -293,6 +295,7 @@ export default function HomeApp() {
         caption_template: captionTemplate,
         output_format: outputFormat,
         add_subtitles: addSubtitles,
+        hook_intro: hookIntro,
         cut_long_pauses: cutLongPauses,
         pause_threshold_ms: normalizedPauseThreshold,
         remove_filler_words: removeFillerWords,
@@ -649,6 +652,17 @@ export default function HomeApp() {
               <Chip onClick={() => setAddSubtitles((value) => !value)} disabled={controlsDisabled} aria-pressed={addSubtitles} active={!addSubtitles}>
                 {addSubtitles ? <Captions className="size-3.5" /> : <CaptionsOff className="size-3.5" />}
                 {addSubtitles ? "Legendas" : "Sem legendas"}
+              </Chip>
+
+              <Chip
+                onClick={() => setHookIntro((value) => !value)}
+                disabled={controlsDisabled}
+                aria-pressed={hookIntro}
+                active={hookIntro}
+                title="Abre o clipe com o trecho mais forte, polêmico ou engraçado, rebobina e então começa o corte"
+              >
+                <Rewind className="size-3.5" />
+                Ganho inicial
               </Chip>
 
               <Popover>

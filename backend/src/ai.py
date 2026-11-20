@@ -460,7 +460,8 @@ HOOK TITLES ("hook_title" per segment):
 - Good examples (Portuguese transcript): "O erro de 40 mil que eu sempre vejo", "Ninguém te conta isso sobre investimento"
 
 COLD-OPEN HOOK ("hook_start_time"/"hook_end_time" per segment, optional):
-- If the segment's most gripping 2-5 second line (punchline, bold claim, shocking number, emotional peak) comes later in the clip, return its MM:SS range; it is replayed as a teaser before the clip starts
+- If the segment's most gripping 2-5 second line (punchline, funniest moment, most controversial or polemic take, bold claim, shocking number, loud reaction, emotional peak) comes later in the clip, return its MM:SS range; it is replayed as a teaser before the clip starts, followed by a quick rewind back to the beginning
+- Prefer returning one whenever a later moment beats the opening: a strong teaser is what keeps viewers past the first seconds
 - Use timestamps from the transcript lines inside the segment, at least 3 seconds after start_time
 - The line must make sense on its own and must not spoil the setup in a confusing way
 - Set both to null when the clip already opens on its strongest line or no line qualifies
@@ -1748,3 +1749,113 @@ async def get_most_relevant_parts_by_transcript(
 def get_most_relevant_parts_sync(transcript: str) -> TranscriptAnalysis:
     """Synchronous wrapper for the async function."""
     return asyncio.run(get_most_relevant_parts_by_transcript(transcript))
+
+
+# --- Post texts (TikTok, Instagram, YouTube Shorts) -------------------------
+# Prompt adapted from SHARINGAN's cut captions (src/cortes/postar.ts, MIT
+# licence, (c) 2026 the SHARINGAN authors).
+
+
+class PostTexts(BaseModel):
+    """Ready-to-paste post copy for one clip on each platform."""
+
+    tiktok: str = Field(
+        description="1-2 short sentences with a hook (a question that invites comments works) and 3-5 hashtags at the end"
+    )
+    instagram: str = Field(
+        description=(
+            "First line that stops the scroll (shown before 'more'), 1-3 short lines of context, "
+            "a call to comment, tag a friend or save, then 5-8 hashtags at the end"
+        )
+    )
+    youtube_title: str = Field(
+        description="Up to 80 characters, curious and faithful to the clip, not all caps, no hashtags"
+    )
+    youtube_description: str = Field(
+        description="2-3 lines: the hook, a call to subscribe, and 3 hashtags (one of them #shorts)"
+    )
+
+
+post_texts_system_prompt = """You are the social media manager of a short-form clips channel.
+You write the post copy for one vertical clip on TikTok, Instagram Reels and YouTube Shorts.
+
+Rules:
+- Write in the same language as the clip transcript (a Portuguese transcript gets Brazilian Portuguese copy), even though these instructions are in English.
+- Sound like a person who watches this kind of content: direct, with a hook, never robotic or corporate.
+- Never promise what the clip does not show; never invent facts, names or numbers.
+- Each platform gets its own copy; do not paste the same text three times.
+- Do not use em dashes.
+- Follow the creator's extra request when there is one, as long as it keeps the rules above.
+- Return valid JSON only."""
+
+_post_texts_agent: Optional[Agent[None, PostTexts]] = None
+_post_texts_agent_signature: Optional[tuple[str | None, ...]] = None
+
+
+def get_post_texts_agent() -> Agent[None, PostTexts]:
+    """Get or create the post-copy agent (lazy initialization)."""
+    global _post_texts_agent, _post_texts_agent_signature
+    runtime_config = get_config()
+    provider, _ = _split_llm_name(runtime_config.llm)
+    signature = (
+        runtime_config.llm,
+        runtime_config.openai_api_key,
+        runtime_config.openai_base_url,
+        runtime_config.openrouter_api_key,
+        runtime_config.openrouter_fallback_model,
+        runtime_config.google_api_key,
+        runtime_config.anthropic_api_key,
+        runtime_config.ollama_base_url,
+        runtime_config.ollama_api_key,
+    )
+    if _post_texts_agent is None or _post_texts_agent_signature != signature:
+        apply_settings_to_process_env(runtime_config.as_runtime_settings())
+        config_error = _get_missing_llm_key_error(runtime_config.llm, runtime_config)
+        if config_error:
+            raise RuntimeError(config_error)
+        _post_texts_agent = Agent[None, PostTexts](
+            model=_build_transcript_model(runtime_config),
+            output_type=NativeOutput(PostTexts, strict=True) if provider == "openrouter" else PostTexts,
+            system_prompt=post_texts_system_prompt,
+            output_retries=2,
+        )
+        _post_texts_agent_signature = signature
+    return _post_texts_agent
+
+
+def _clean_post_text(value: str, limit: int) -> str:
+    text = re.sub(r"\s*[—–]\s*", ", ", str(value or "")).strip()
+    return text[:limit].rstrip()
+
+
+def build_post_texts_prompt(
+    clip_text: str, hook_title: Optional[str] = None, instructions: Optional[str] = None
+) -> str:
+    parts = []
+    if hook_title:
+        parts.append(f"ON-SCREEN TITLE OF THE CLIP: {hook_title.strip()}")
+    parts.append(f"WHAT IS SAID IN THE CLIP:\n{(clip_text or '(no transcript)').strip()[:3000]}")
+    if instructions and instructions.strip():
+        parts.append(f"CREATOR'S EXTRA REQUEST: {instructions.strip()[:300]}")
+    return "\n\n".join(parts)
+
+
+async def generate_post_texts(
+    clip_text: str, hook_title: Optional[str] = None, instructions: Optional[str] = None
+) -> Dict[str, Any]:
+    """TikTok, Instagram and YouTube copy for a clip, ready to paste."""
+    result = await _run_transcript_analysis(
+        get_post_texts_agent(),
+        build_post_texts_prompt(clip_text, hook_title, instructions),
+        timeout_seconds=90,
+    )
+    texts: PostTexts = result.output
+    title = re.sub(r"#\S+", "", _clean_post_text(texts.youtube_title, 100)).strip()
+    return {
+        "tiktok": _clean_post_text(texts.tiktok, 2200),
+        "instagram": _clean_post_text(texts.instagram, 2200),
+        "youtube": {
+            "title": title or (hook_title or "").strip()[:100],
+            "description": _clean_post_text(texts.youtube_description, 4900),
+        },
+    }

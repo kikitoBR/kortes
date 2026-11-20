@@ -34,6 +34,7 @@ async def process_video_task(
     cleanup_settings: Dict[str, Any] | None = None,
     clip_duration: Optional[str] = "auto",
     webcam_region: Dict[str, float] | None = None,
+    hook_intro: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -103,6 +104,7 @@ async def process_video_task(
                 clip_ready_callback=clip_ready_callback,
                 cleanup_settings=cleanup_settings,
                 webcam_region=normalize_webcam_region(webcam_region),
+                hook_intro=hook_intro if isinstance(hook_intro, bool) else None,
             )
 
             logger.info(f"Task {task_id} completed successfully")

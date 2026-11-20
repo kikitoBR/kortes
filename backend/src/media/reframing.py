@@ -28,6 +28,7 @@ from .common import (
     logger,
 )
 from .face_detection import open_haar_cascade, open_yunet_detector
+from .webcam_detection import detect_webcam_box
 from .ffmpeg import (
     build_audio_output_args,
     build_final_video_encode_args,
@@ -809,6 +810,28 @@ def gameplay_regions_from_box(
     }
 
 
+def auto_gameplay_regions(
+    clip_path: Path, width: int, height: int
+) -> Optional[Dict[str, Dict[str, int]]]:
+    """Gameplay regions from the auto-detected webcam overlay.
+
+    Uses the steady-face + steady-border finder; falls back to growing a box
+    around the dominant face when that finder sees no steady face.
+    """
+    found = detect_webcam_box(clip_path)
+    if found and found.get("kind") == "full":
+        logger.info("Whole frame is the camera; gameplay layout does not apply")
+        return None
+    if found and found.get("box"):
+        x, y, w, h = found["box"]
+        return gameplay_regions_from_box(
+            width, height, {"x": x / width, "y": y / height, "w": w / width, "h": h / height}
+        )
+    duration = ffprobe_duration(clip_path)
+    faces = detect_faces_in_clip(clip_path, 0, min(duration, 12.0))
+    return compute_gameplay_regions(width, height, faces)
+
+
 def detect_gameplay_plan(
     clip_path: Path, webcam_region: Optional[Dict[str, float]] = None
 ) -> Optional[Dict[str, Dict[str, int]]]:
@@ -826,9 +849,7 @@ def detect_gameplay_plan(
             else None
         )
         if not regions:
-            duration = ffprobe_duration(clip_path)
-            faces = detect_faces_in_clip(clip_path, 0, min(duration, 12.0))
-            regions = compute_gameplay_regions(width, height, faces)
+            regions = auto_gameplay_regions(clip_path, width, height)
         if regions:
             rows = detect_letterbox_rows(clip_path, width, height)
             if rows:

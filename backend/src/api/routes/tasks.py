@@ -45,6 +45,8 @@ from ...clip_cleanup import (
 )
 from ...video_utils import VALID_OUTPUT_FORMATS
 from ...media.common import normalize_webcam_region
+from ...media.covers import COVER_MAX_TEXT, pick_cover_time, render_clip_cover
+from ...ai import generate_post_texts
 from ...admin_auth import require_admin_user, user_is_admin
 import redis.asyncio as redis
 from ...clip_editor import export_with_preset, EXPORT_PRESETS
@@ -213,6 +215,7 @@ def _merge_task_source_metadata(
     cleanup_settings: Dict[str, Any] | None = None,
     clip_duration: Any = None,
     webcam_region: Dict[str, float] | None = None,
+    hook_intro: Any = None,
 ) -> Dict[str, Any]:
     merged = dict(existing or {})
 
@@ -230,6 +233,8 @@ def _merge_task_source_metadata(
         merged["clip_duration"] = clip_duration
     if webcam_region:
         merged["webcam_region"] = webcam_region
+    if isinstance(hook_intro, bool):
+        merged["hook_intro"] = hook_intro
 
     return merged
 
@@ -382,6 +387,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         if output_format == "vertical_gameplay"
         else None
     )
+    # "Ganho inicial": None keeps the server default (HOOK_FIRST_TEASER).
+    hook_intro = data.get("hook_intro")
+    if not isinstance(hook_intro, bool):
+        hook_intro = None
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="O link de origem é obrigatório")
 
@@ -430,6 +439,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                         cleanup_settings=cleanup_settings,
                         clip_duration=clip_duration,
                         webcam_region=webcam_region,
+                        hook_intro=hook_intro,
                     ),
                     db=db,
                 )
@@ -453,6 +463,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     cleanup_settings,
                     clip_duration,
                     webcam_region,
+                    hook_intro,
                     _job_id=processing_job_id,
                 )
 
@@ -1131,6 +1142,105 @@ async def export_clip(
         raise HTTPException(status_code=500, detail=f"Erro ao exportar o clipe: {str(e)}")
 
 
+async def _load_readable_clip(
+    request: Request, db: AsyncSession, task_id: str, clip_id: str, owner: bool = False
+) -> Dict[str, Any]:
+    task_service = TaskService(db)
+    if owner:
+        await _require_task_owner(request, task_service, db, task_id)
+    else:
+        await _require_task_reader(request, task_service, db, task_id)
+    clip = await task_service.clip_repo.get_clip_by_id(db, clip_id)
+    if not clip or clip.get("task_id") != task_id:
+        raise HTTPException(status_code=404, detail="Clipe não encontrado")
+    return clip
+
+
+def _default_cover_text(clip: Dict[str, Any]) -> str:
+    title = (clip.get("hook_title") or "").strip()
+    if title:
+        return title
+    return " ".join(str(clip.get("text") or "").split()[:6])
+
+
+@router.get("/{task_id}/clips/{clip_id}/cover/suggest")
+async def suggest_clip_cover(
+    task_id: str,
+    clip_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    """Best frame (clip second) and default text for the clip's cover."""
+    clip = await _load_readable_clip(request, db, task_id, clip_id)
+    await db.close()
+    try:
+        local_path = await run_in_thread(MediaStorage().local_path, clip["file_path"])
+        at = await run_in_thread(pick_cover_time, Path(local_path))
+    except Exception as e:
+        logger.error(f"Error picking cover frame: {e}")
+        raise HTTPException(status_code=500, detail="Não foi possível analisar o clipe para a capa")
+    return {"time": at, "text": _default_cover_text(clip), "duration": clip.get("duration")}
+
+
+@router.get("/{task_id}/clips/{clip_id}/cover")
+async def get_clip_cover(
+    task_id: str,
+    clip_id: str,
+    request: Request,
+    text: Optional[str] = None,
+    t: Optional[float] = None,
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    """JPEG cover: a frame of the clip with the cover text (Instagram, TikTok, YouTube)."""
+    clip = await _load_readable_clip(request, db, task_id, clip_id)
+    await db.close()
+    cover_text = _default_cover_text(clip) if text is None else text[:COVER_MAX_TEXT]
+    if t is not None and (not math.isfinite(t) or t < 0):
+        raise HTTPException(status_code=400, detail="Tempo da capa inválido")
+    try:
+        local_path = await run_in_thread(MediaStorage().local_path, clip["file_path"])
+        covers_dir = Path(get_config().temp_dir) / "covers"
+        covers_dir.mkdir(parents=True, exist_ok=True)
+        output_path = covers_dir / f"{clip_id}_{secrets.token_hex(6)}.jpg"
+        await run_in_thread(render_clip_cover, Path(local_path), output_path, cover_text, t)
+    except Exception as e:
+        logger.error(f"Error rendering cover: {e}")
+        raise HTTPException(status_code=500, detail="Não foi possível gerar a capa")
+    return FileResponse(
+        path=str(output_path),
+        media_type="image/jpeg",
+        filename=f"{Path(clip['filename']).stem}_capa.jpg",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(output_path.unlink, missing_ok=True),
+    )
+
+
+@router.post("/{task_id}/clips/{clip_id}/post-texts")
+async def generate_clip_post_texts(
+    task_id: str,
+    clip_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    """AI-written post copy for TikTok, Instagram and YouTube Shorts."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    instructions = payload.get("instructions") if isinstance(payload, dict) else None
+    if instructions is not None and not isinstance(instructions, str):
+        raise HTTPException(status_code=400, detail="instructions deve ser um texto")
+    clip = await _load_readable_clip(request, db, task_id, clip_id, owner=True)
+    await db.close()
+    try:
+        return await generate_post_texts(
+            str(clip.get("text") or ""), clip.get("hook_title"), (instructions or "")[:300]
+        )
+    except Exception as e:
+        logger.error(f"Error generating post texts: {e}")
+        raise HTTPException(status_code=502, detail="Não foi possível escrever os textos agora. Tente de novo.")
+
+
 @router.post("/{task_id}/cancel")
 async def cancel_task(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
@@ -1286,6 +1396,7 @@ async def resume_task(
                         cleanup_settings,
                         clip_duration,
                         normalize_webcam_region(metadata.get("webcam_region")),
+                        metadata.get("hook_intro") if isinstance(metadata.get("hook_intro"), bool) else None,
                         _job_id=processing_job_id,
                     )
                 except Exception:

@@ -233,6 +233,7 @@ class VideoService:
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
         webcam_region: Optional[Dict[str, float]] = None,
+        hook_intro: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
         """
         Create standalone video clips from segments with optional subtitles.
@@ -257,6 +258,7 @@ class VideoService:
             add_subtitles,
             cleanup_settings,
             webcam_region=webcam_region,
+            hook_intro=hook_intro,
         )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
@@ -276,6 +278,7 @@ class VideoService:
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
         webcam_region: Optional[Dict[str, float]] = None,
+        hook_intro: Optional[bool] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure."""
         try:
@@ -324,7 +327,10 @@ class VideoService:
             keep_ranges = extend_keep_ranges_to_sentence_boundary(video_path, keep_ranges)
             clip_text = segment.get("text", "")
             if not provided_keep_ranges and not source_ranges:
-                keep_ranges = apply_segment_hook_teaser(video_path, keep_ranges, segment)
+                keep_ranges = apply_segment_hook_teaser(
+                    video_path, keep_ranges, segment,
+                    enabled=hook_intro, rewind=hook_intro is True,
+                )
                 # Snapping, cleanup and the teaser change what is spoken; keep
                 # the stored text word-for-word with the rendered timeline.
                 clip_text = keep_ranges_transcript_text(video_path, keep_ranges) or clip_text
@@ -344,6 +350,7 @@ class VideoService:
                 keep_ranges,
                 segment.get("hook_title"),
                 webcam_region=webcam_region,
+                hook_rewind=hook_intro is True,
             )
 
             if not success:

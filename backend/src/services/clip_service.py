@@ -104,6 +104,7 @@ class ClipEditingMixin:
         output_format = metadata.get("output_format", "vertical")
         add_subtitles = metadata.get("add_subtitles", True)
         webcam_region = metadata.get("webcam_region")
+        hook_intro = metadata.get("hook_intro")
         cleanup_payload = cleanup_settings or {
             "cut_long_pauses": metadata.get("cut_long_pauses"),
             "pause_threshold_ms": metadata.get("pause_threshold_ms"),
@@ -191,6 +192,7 @@ class ClipEditingMixin:
                 add_subtitles,
                 normalized_cleanup_settings,
                 webcam_region=webcam_region,
+                hook_intro=hook_intro,
             )
         finally:
             if source_type == "youtube":
@@ -477,6 +479,7 @@ class ClipEditingMixin:
                     caption_template=task.get("caption_template") or "default",
                     extend_to_sentence=False,
                     webcam_region=settings.get("webcam_region"),
+                    hook_rewind=settings.get("hook_intro") is True,
                 )
                 if not rendered:
                     raise ValueError("Não foi possível preparar o clipe para editar as legendas")
@@ -588,6 +591,7 @@ class ClipEditingMixin:
             "output_format": output_format,
             "add_subtitles": add_subtitles,
             "webcam_region": normalize_webcam_region(parsed.get("webcam_region")),
+            "hook_intro": parsed.get("hook_intro") if isinstance(parsed.get("hook_intro"), bool) else None,
             **normalize_clip_cleanup_settings(
                 parsed.get("cut_long_pauses"),
                 parsed.get("pause_threshold_ms"),

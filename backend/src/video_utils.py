@@ -34,6 +34,7 @@ from .media.transcription import (
 from .media.timeline import (
     add_hook_teaser_to_keep_ranges,
     apply_segment_hook_teaser,
+    hook_rewind_point,
     build_clip_keep_ranges,
     build_hook_teaser_range,
     build_keep_ranges_from_source_ranges,
@@ -50,6 +51,7 @@ from .media.captions import (
 from .media.reframing import (
     render_reframed_clip_ffmpeg,
 )
+from .media.hook_rewind import apply_hook_rewind
 from .media.speaker_framing import (
     build_clip_speaker_turns,
 )
@@ -262,6 +264,7 @@ def create_optimized_clip(
     hook_title: Optional[str] = None,
     extend_to_sentence: bool = True,
     webcam_region: Optional[Dict[str, float]] = None,
+    hook_rewind: bool = False,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
     try:
@@ -391,6 +394,10 @@ def create_optimized_clip(
             if not framed_ok:
                 raise RuntimeError("ffmpeg reframe render failed")
 
+            rewind_at = hook_rewind_point(effective_keep_ranges) if hook_rewind else None
+            if rewind_at is not None:
+                apply_hook_rewind(final_clip_path, rewind_at)
+
             shutil.move(str(final_clip_path), str(output_path))
             logger.info(f"Successfully created clip with ffmpeg: {output_path}")
             return True
@@ -412,6 +419,7 @@ def create_clips_from_segments(
     add_subtitles: bool = True,
     cleanup_settings: Optional[Dict[str, Any]] = None,
     webcam_region: Optional[Dict[str, float]] = None,
+    hook_intro: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments with template support."""
     logger.info(
@@ -474,7 +482,10 @@ def create_clips_from_segments(
             keep_ranges = extend_keep_ranges_to_sentence_boundary(video_path, keep_ranges)
             clip_text = segment["text"]
             if not provided_keep_ranges and not provided_source_ranges:
-                keep_ranges = apply_segment_hook_teaser(video_path, keep_ranges, segment)
+                keep_ranges = apply_segment_hook_teaser(
+                    video_path, keep_ranges, segment,
+                    enabled=hook_intro, rewind=hook_intro is True,
+                )
                 # Snapping, cleanup and the teaser change what is spoken; keep
                 # the stored text word-for-word with the rendered timeline.
                 clip_text = keep_ranges_transcript_text(video_path, keep_ranges) or clip_text
@@ -493,6 +504,7 @@ def create_clips_from_segments(
                 keep_ranges,
                 hook_title=segment.get("hook_title"),
                 webcam_region=webcam_region,
+                hook_rewind=hook_intro is True,
             )
 
             if success:
@@ -646,6 +658,7 @@ def create_clips_with_transitions(
     add_subtitles: bool = True,
     cleanup_settings: Optional[Dict[str, Any]] = None,
     webcam_region: Optional[Dict[str, float]] = None,
+    hook_intro: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """Create standalone video clips without inter-clip transitions.
 
@@ -669,6 +682,7 @@ def create_clips_with_transitions(
         add_subtitles,
         cleanup_settings,
         webcam_region=webcam_region,
+        hook_intro=hook_intro,
     )
 
 

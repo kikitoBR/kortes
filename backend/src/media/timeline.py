@@ -15,6 +15,7 @@ from .common import (
     CLIP_END_SENTENCE_EXTENSION_SECONDS,
     CLIP_START_LEAD_IN_SECONDS,
     CLIP_START_SNAP_WINDOW_SECONDS,
+    HOOK_REWIND_SECONDS,
     HOOK_TEASER_MAX_SECONDS,
     HOOK_TEASER_MIN_OFFSET_SECONDS,
     HOOK_TEASER_MIN_SECONDS,
@@ -318,11 +319,15 @@ def add_hook_teaser_to_keep_ranges(
     keep_ranges: List[Tuple[float, float]],
     hook_start: Optional[float],
     hook_end: Optional[float],
+    rewind_seconds: float = 0.0,
 ) -> List[Tuple[float, float]]:
     """Prepend a cold-open teaser of the hook line before the clip body.
 
     The result is intentionally non-monotonic ([teaser, body...]); everything
     downstream (rendering, captions, source maps) walks ranges in list order.
+    With ``rewind_seconds`` a placeholder range of exactly that length is
+    appended right after the teaser; the rewind effect later paints over it
+    (see ``hook_rewind_point``).
     """
     normalized = normalize_source_ranges(keep_ranges)
     if not normalized or hook_start is None or hook_end is None:
@@ -352,7 +357,41 @@ def add_hook_teaser_to_keep_ranges(
     if teaser_duration < HOOK_TEASER_MIN_SECONDS:
         return normalized
     logger.info("Adding %.1fs hook teaser from %.2fs", teaser_duration, teaser[0])
+    if rewind_seconds > 0:
+        tail_start = teaser_ranges[-1][1]
+        tail_end = tail_start + rewind_seconds
+        try:
+            fits = tail_end <= ffprobe_duration(video_path)
+        except Exception:
+            fits = False
+        if fits:
+            teaser_ranges.append((tail_start, tail_end))
     return [*teaser_ranges, *normalized]
+
+
+def hook_rewind_point(
+    keep_ranges: List[Tuple[float, float]],
+    rewind_seconds: float = HOOK_REWIND_SECONDS,
+) -> Optional[float]:
+    """Clip time where the rewind beat starts, or None without one.
+
+    The beat is marked by the teaser's last range: exactly ``rewind_seconds``
+    long and contiguous with the range before it (cleanup cuts always leave a
+    gap, so real teaser pieces never look like this).
+    """
+    ranges = normalize_source_ranges(keep_ranges)
+    breaks = [i for i in range(1, len(ranges)) if ranges[i][0] < ranges[i - 1][0]]
+    if not breaks:
+        return None
+    prefix = ranges[: breaks[0]]
+    if len(prefix) < 2:
+        return None
+    (_, previous_end), (tail_start, tail_end) = prefix[-2], prefix[-1]
+    if abs((tail_end - tail_start) - rewind_seconds) > 0.02 or abs(tail_start - previous_end) > 0.02:
+        return None
+    at = sum(end - start for start, end in prefix[:-1])
+    # The beat replays the last 3x its length of the teaser backwards.
+    return at if at >= rewind_seconds * 3 else None
 
 
 def _parse_hook_label(value: Any) -> Optional[float]:
@@ -373,15 +412,23 @@ def apply_segment_hook_teaser(
     video_path: Path,
     keep_ranges: List[Tuple[float, float]],
     segment: Dict[str, Any],
+    enabled: Optional[bool] = None,
+    rewind: bool = False,
 ) -> List[Tuple[float, float]]:
-    """Add the segment's AI-picked hook teaser when HOOK_FIRST_TEASER is on."""
-    if not get_config().hook_first_teaser:
+    """Add the segment's AI-picked hook teaser.
+
+    ``enabled`` is the task's "Ganho inicial" choice; None (API clients that
+    don't send it) follows HOOK_FIRST_TEASER. ``rewind`` adds the rewind beat.
+    """
+    use_teaser = get_config().hook_first_teaser if enabled is None else enabled
+    if not use_teaser:
         return normalize_source_ranges(keep_ranges)
     return add_hook_teaser_to_keep_ranges(
         video_path,
         keep_ranges,
         _parse_hook_label(segment.get("hook_start_time")),
         _parse_hook_label(segment.get("hook_end_time")),
+        rewind_seconds=HOOK_REWIND_SECONDS if rewind else 0.0,
     )
 
 

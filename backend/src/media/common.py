@@ -111,6 +111,12 @@ HOOK_TEASER_MAX_SECONDS = 5.0
 
 HOOK_TEASER_MIN_OFFSET_SECONDS = 3.0
 
+# "Ganho inicial": after the cold-open teaser, a short tape-rewind beat plays
+# before the clip starts. It replaces a placeholder range of exactly this
+# length appended to the teaser, so clip duration, captions and source maps
+# stay in sync.
+HOOK_REWIND_SECONDS = 0.5
+
 # Long pauses are compressed rather than cut out, so speech keeps a natural
 # breath between phrases. A junction keeps PAUSE_EDGE_PADDING_SECONDS of silence
 # on each side of the cut; with the junction crossfade (at most

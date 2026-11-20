@@ -275,6 +275,9 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
 - Virality scoring: `hook_score`, `engagement_score`, `value_score`, `shareability_score` (0-25 each, summed to `virality_score` 0-100)
 - Each segment gets an AI-written `hook_title` (3-9 words) burned into the top safe area for the first ~4s (`build_hook_title_ass` in `video_utils.py`), persisted on `generated_clips.hook_title`
 - Static talking-head crops get a slow ~5% Ken Burns punch-in (`kenburns_zoom_fragment`); tracked pans and split screens keep their own motion
+- `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders where per-pixel motion jumps from the static room to the moving game; ported from SHARINGAN, MIT). Letterbox bars are trimmed from the game crop via cropdetect
+- "Ganho inicial" (`hook_intro` per task; omitted = `HOOK_FIRST_TEASER` with a hard cut): the AI hook line plays first, then a 0.5 s tape-rewind beat (`media/hook_rewind.py`) paints over a placeholder range appended to the teaser, so durations, captions and source maps stay in sync (`timeline.hook_rewind_point`)
+- Clip extras (on demand, nothing stored): `GET /tasks/{id}/clips/{clip_id}/cover[/suggest]` renders a cover JPEG (`media/covers.py`), `POST /tasks/{id}/clips/{clip_id}/post-texts` writes TikTok/Instagram/YouTube copy (`ai.generate_post_texts`, owner only)
 
 ## iOS App
 

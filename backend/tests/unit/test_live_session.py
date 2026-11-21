@@ -232,3 +232,29 @@ async def test_stop_ends_the_recording_and_keeps_what_was_heard(config, stream_f
     assert hooks.probes == 1  # a stop is not a dropped stream: no reconnect
     assert not list((live_dir("task-stop") / "pieces").glob("*.ts"))
     assert any("Ao vivo · gravando há" in m for m in hooks.messages)
+
+
+@pytest.mark.asyncio
+async def test_stop_now_drops_the_queue_and_says_so(config, tmp_path):
+    class Hooks(FakeHooks):
+        async def control(self):
+            return "stop_now"
+
+    hooks = Hooks(tmp_path)
+    session = LiveSession("task-now", LiveOptions(), hooks)
+    session.state["clips"] = [
+        {"n": 1, "start": 10.0, "end": 40.0, "status": "ready"},
+        {"n": 2, "start": 50.0, "end": 80.0, "status": "rendering"},
+        {"n": 3, "start": 90.0, "end": 120.0, "status": "queued"},
+    ]
+    await session.check_control()
+
+    assert session.stopped_by_user and session.discard_queue and session.ending
+    assert [c["status"] for c in session.state["clips"]] == ["ready", "rendering", "cancelled"]
+    assert hooks.messages[-1].startswith("Gravação parada")
+    # A queued moment still in the render queue is skipped, not rendered.
+    record = {"n": 4, "start": 0, "end": 1, "status": "queued"}
+    await session.renders.put((record, {}, tmp_path / "a.mkv"))
+    await session.renders.put(None)
+    await session.render_loop()
+    assert record["status"] == "cancelled" and not hooks.rendered

@@ -29,6 +29,7 @@ from ..video_utils import (
     build_clip_keep_ranges,
     build_keep_ranges_from_source_ranges,
     build_clip_signal_summary,
+    get_words_for_keep_ranges,
     apply_segment_hook_teaser,
     extend_keep_ranges_to_sentence_boundary,
     keep_ranges_transcript_text,
@@ -48,8 +49,11 @@ from ..media.voice_energy import energy_zscores, measure_voice_energy
 from ..media_storage import MediaStorage
 from ..youtube_sections import download_youtube_audio
 
+from ..show import caption_words_per_line, teaser_count
+
 if TYPE_CHECKING:
     from .clip_source import ClipSource
+    from ..show import ShowReporter
 
 logger = logging.getLogger(__name__)
 UPLOAD_URL_PREFIX = "upload://"
@@ -304,6 +308,7 @@ class VideoService:
         webcam_region: Optional[Dict[str, float]] = None,
         hook_intro: Optional[bool] = None,
         clip_source: Optional["ClipSource"] = None,
+        show: Optional["ShowReporter"] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure.
 
@@ -366,9 +371,26 @@ class VideoService:
                 # the stored text word-for-word with the rendered timeline.
                 clip_text = keep_ranges_transcript_text(video_path, keep_ranges) or clip_text
 
+            if show is not None:
+                # The page's show: the real cuts and every word on the clip's timeline.
+                timed = get_words_for_keep_ranges(load_cached_transcript_data(video_path) or {}, keep_ranges)
+                await show.clip(
+                    stage="cortes",
+                    ranges=[[round(a, 2), round(b, 2)] for a, b in keep_ranges],
+                    teaser=teaser_count(keep_ranges),
+                    duration=round(sum(b - a for a, b in keep_ranges), 2),
+                    words=[
+                        {"text": w["text"], "start": round(w["start"], 2), "end": round(w["end"], 2)}
+                        for w in timed
+                    ],
+                    title=segment.get("hook_title"),
+                    words_per_line=caption_words_per_line(caption_template),
+                )
             if clip_source is not None:
                 bounds = source_range_bounds(keep_ranges)
                 if bounds:
+                    if show is not None and getattr(clip_source, "sections", False):
+                        await show.clip(stage="trecho")
                     render_source = await clip_source.render_source(*bounds)
 
             success = await run_in_thread(
@@ -388,6 +410,9 @@ class VideoService:
                 webcam_region=webcam_region,
                 hook_rewind=hook_intro is True,
                 render_source=render_source,
+                show_hook=show.clip_threadsafe if show is not None else None,
+                show_dir=show.clip_dir if show is not None else None,
+                show_url=show.asset_url if show is not None else None,
             )
 
             if not success:

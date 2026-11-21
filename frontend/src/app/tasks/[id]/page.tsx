@@ -58,8 +58,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import Link from "next/link";
 import { ClipTile, ClipFocus, ProcessingPanel, EmptyState } from "@/components/app/clip-wall";
 import { LiveWatch } from "@/components/app/live-watch";
-import { AssemblyShow, type AssemblingClip, type ReadyFlash } from "@/components/app/assembly-show";
-import { getYouTubeThumbnailUrl } from "@/lib/video-upload";
+import { AssemblyShow, type ShowState } from "@/components/app/assembly-show";
 import type { LiveEmbed } from "@/lib/live-links";
 import { timeAgo } from "@/lib/generations";
 import { cn } from "@/lib/utils";
@@ -104,6 +103,7 @@ interface TaskDetails {
   source_type: string;
   source_url?: string | null;
   live_embed?: LiveEmbed | null;
+  live_stopping?: boolean;
   output_format?: string;
   status: string;
   progress?: number;
@@ -122,25 +122,15 @@ interface TaskDetails {
   share_enabled?: boolean;
 }
 
-/** A picture of the source for the assembly show (the live's current preview when possible). */
-function showSourceImage(task: TaskDetails): string | null {
-  const embed = task.live_embed;
-  if (embed?.platform === "youtube" && embed.video_id) return `https://i.ytimg.com/vi/${embed.video_id}/hqdefault_live.jpg`;
-  if (embed?.platform === "twitch" && embed.channel) {
-    return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${embed.channel.toLowerCase()}-640x360.jpg`;
-  }
-  if (task.source_type === "live" && task.source_url) return `/api/tasks/live/snapshot?url=${encodeURIComponent(task.source_url)}`;
-  return task.source_url ? getYouTubeThumbnailUrl(task.source_url) : null;
-}
-
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
   const { data: session } = useSession();
   const [task, setTask] = useState<TaskDetails | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
-  const [assembling, setAssembling] = useState<AssemblingClip | null>(null);
-  const [readyFlash, setReadyFlash] = useState<ReadyFlash | null>(null);
+  const [show, setShow] = useState<ShowState | null>(null);
+  const [stopLiveOpen, setStopLiveOpen] = useState(false);
+  const queuedLiveClips = (show?.queue ?? []).filter((item) => item.status === "na fila").length;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -373,19 +363,35 @@ export default function TaskPage() {
     onClip: (clip) => {
       setClips((current) =>
         [...current.filter((item) => item.id !== clip.id), clip].sort((a, b) => a.clip_order - b.clip_order));
-      setReadyFlash({ url: getClipUrl(clip.video_url, clip.filename), title: clip.hook_title, at: Date.now() });
     },
-    onClipStarted: (data) => setAssembling({
-      index: Number(data.clip_index ?? 0),
-      total: Number(data.total_clips ?? 0),
-      start_time: (data.start_time as string) ?? null,
-      end_time: (data.end_time as string) ?? null,
-      hook_title: (data.hook_title as string) ?? null,
-      words: Array.isArray(data.words) ? (data.words as string[]) : [],
-      layout: (data.layout as string) ?? null,
-      at: Date.now(),
-    }),
+    onShow: (state) => setShow(state as unknown as ShowState),
   });
+
+  // A page opened mid-render still sees the clip being made and the queue.
+  const taskStatus = task?.status;
+  useEffect(() => {
+    if (taskStatus !== "processing" || !params.id) return;
+    let cancelled = false;
+    void fetch(`${taskApiUrl}/${params.id}/show`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((state) => {
+        if (!cancelled && state) setShow(state as ShowState);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [taskStatus, params.id, taskApiUrl]);
+
+  const stopLive = async (discardQueue: boolean) => {
+    if (!task) return;
+    setStopLiveOpen(false);
+    await runAction("stop-live", async () => {
+      await requestAction(`${taskApiUrl}/${task.id}/live/stop`, "POST", { discard_queue: discardQueue });
+      await fetchTaskStatus(0, 0, true);
+      toast.success(discardQueue ? "Gravação parada. A fila foi descartada." : "Gravação parada. Terminando os cortes da fila.");
+    });
+  };
 
   const runAction = async (name: string, action: () => Promise<void>) => {
     if (pendingAction) return;
@@ -715,13 +721,9 @@ export default function TaskPage() {
           {!readOnly && (
           <div className="flex flex-wrap items-center gap-2">
             {isActive && task.source_type === "live" && (
-              <Button size="sm" variant="outline" disabled={pendingAction !== null}
-                onClick={() => void runAction("stop-live", async () => {
-                  await requestAction(`${taskApiUrl}/${task.id}/live/stop`, "POST");
-                  await fetchTaskStatus();
-                  toast.success("Parando a live. Os últimos momentos ainda viram corte.");
-                })}>
-                Parar a live
+              <Button size="sm" variant="outline" disabled={pendingAction !== null || task.live_stopping}
+                onClick={() => setStopLiveOpen(true)}>
+                {task.live_stopping ? <><Loader2 className="size-4 animate-spin" /> Parando…</> : "Parar a live"}
               </Button>
             )}
             {isActive && task.source_type !== "live" && (
@@ -795,18 +797,11 @@ export default function TaskPage() {
 
         {isActive && task ? (
           <div className="space-y-8">
-            {task.source_type === "live" && task.live_embed && <LiveWatch embed={task.live_embed} />}
+            {task.source_type === "live" && task.live_embed && !task.live_stopping && <LiveWatch embed={task.live_embed} />}
             {task.status === "processing" && (
-              <AssemblyShow
-                message={progressMessage}
-                live={task.source_type === "live"}
-                layout={assembling?.layout || task.output_format || "vertical"}
-                source={showSourceImage(task)}
-                assembling={assembling}
-                ready={readyFlash}
-              />
+              <AssemblyShow show={show} message={progressMessage} live={task.source_type === "live"} />
             )}
-            <ProcessingPanel status={task.status} progress={progress} message={progressMessage} readyCount={clips.length} live={task.source_type === "live"} />
+            <ProcessingPanel status={task.status} progress={progress} message={progressMessage} readyCount={clips.length} live={task.source_type === "live"} stopping={task.live_stopping} />
             {clips.length > 0 && (
               <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 {sortedClips.map(renderTile)}
@@ -1053,6 +1048,31 @@ export default function TaskPage() {
         </AlertDialogContent>
       </AlertDialog>
       {/* Delete generation confirmation */}
+      <AlertDialog open={stopLiveOpen} onOpenChange={setStopLiveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Parar a live?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A gravação para agora e nenhum momento novo é procurado. Os cortes prontos ficam.
+              {queuedLiveClips > 0
+                ? ` Ainda há ${queuedLiveClips} ${queuedLiveClips === 1 ? "corte" : "cortes"} na fila: você pode esperar eles ficarem prontos ou descartar.`
+                : " O corte que estiver em montagem termina antes."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Continuar gravando</AlertDialogCancel>
+            {queuedLiveClips > 0 && (
+              <AlertDialogAction className="bg-transparent text-foreground border hover:bg-accent" onClick={() => void stopLive(true)}>
+                Parar e descartar a fila
+              </AlertDialogAction>
+            )}
+            <AlertDialogAction onClick={() => void stopLive(false)}>
+              {queuedLiveClips > 0 ? "Parar e terminar a fila" : "Parar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -120,3 +120,36 @@ async def test_a_live_task_carries_its_player_and_chat(monkeypatch, creation):
     await tasks.create_task(creation.request, db=None)
     metadata = creation.saved.await_args.args[1]
     assert metadata["live_embed"] == {"platform": "youtube", "video_id": "abcdefghijk"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discard,flag", [(False, "1"), (True, "now")])
+async def test_stop_tells_the_worker_and_the_page_at_once(monkeypatch, discard, flag):
+    stored = {}
+
+    class FakeRedis:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def setex(self, key, ttl, value):
+            stored[key] = value
+
+        async def aclose(self):
+            pass
+
+    status = AsyncMock(return_value=True)
+    service = SimpleNamespace(task_repo=SimpleNamespace(update_task_status=status))
+    monkeypatch.setattr(tasks, "TaskService", lambda _db: service)
+    monkeypatch.setattr(tasks, "_require_task_owner", AsyncMock(return_value={"source_type": "live", "status": "processing"}))
+    monkeypatch.setattr(tasks.redis, "Redis", FakeRedis)
+    monkeypatch.setattr(tasks, "_load_task_source_metadata", AsyncMock(return_value={"live": True}))
+    saved = AsyncMock()
+    monkeypatch.setattr(tasks, "_save_task_source_metadata", saved)
+    request = SimpleNamespace(json=AsyncMock(return_value={"discard_queue": discard}))
+
+    result = await tasks.stop_live("task-1", request, db=None)
+
+    assert stored == {"live_stop:task-1": flag}
+    assert saved.await_args.args[1]["live_stop_requested"] is True
+    assert status.await_args.kwargs["progress_message"].startswith("Gravação parada")
+    assert result["message"].startswith("Gravação parada")

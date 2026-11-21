@@ -195,6 +195,9 @@ class LiveSession:
         self.run_origin: Optional[float] = None
         self.ending = False
         self.cancelled = False
+        # The user pressed "Parar": no new moments; "stop_now" also drops the queue.
+        self.stopped_by_user = False
+        self.discard_queue = False
         self.limit_reached = False
         self.reconnects = 0
         self.look_task: Optional[asyncio.Task] = None
@@ -452,20 +455,16 @@ class LiveSession:
             if item is None:
                 return
             record, segment, archive = item
-            if self.cancelled:
+            if self.cancelled or self.discard_queue or record.get("status") == "cancelled":
                 record["status"] = "cancelled"
+                self.save()
                 continue
             record["status"] = "rendering"
             await self.report(force=True)
             started = getattr(self.hooks, "clip_started", None)
             if started:
-                spoken = [
-                    str(w.get("text") or "")
-                    for w in self.words
-                    if record["start"] * 1000 <= w["start"] < record["end"] * 1000
-                ]
                 try:
-                    await started(record["n"] - 1, {**segment, "words": spoken[:40], "layout": self.options.output_format})
+                    await started(record["n"] - 1, segment)
                 except Exception:
                     logger.debug("Assembly show event failed", exc_info=True)
             try:
@@ -487,7 +486,9 @@ class LiveSession:
     # ----- progress and control --------------------------------------------------------
     def message(self) -> str:
         minutes = int(float(self.state["clock"]) // 60)
-        if self.ending:
+        if self.stopped_by_user:
+            head = "Gravação parada · terminando o que já estava em montagem"
+        elif self.ending:
             head = "A live acabou. Montando os últimos cortes..."
             if self.limit_reached:
                 head = "Chegamos ao limite de duração do seu plano. Montando os últimos cortes..."
@@ -501,10 +502,23 @@ class LiveSession:
             parts.append(f"IA viu {self.last_seen}")
         return " · ".join(parts)
 
+    def queue_for_show(self) -> List[Dict[str, Any]]:
+        names = {"queued": "na fila", "rendering": "montando", "ready": "pronto", "failed": "falhou", "missed": "perdido", "cancelled": "cancelado"}
+        return [
+            {"n": c["n"], "start": label(c["start"]), "end": label(c["end"]), "title": c.get("title"), "status": names.get(c.get("status"), c.get("status"))}
+            for c in self.state["clips"]
+        ]
+
     async def report(self, force: bool = False) -> None:
         if not force and time.time() - self.last_progress < PROGRESS_EVERY_SECONDS:
             return
         self.last_progress = time.time()
+        show_queue = getattr(self.hooks, "show_queue", None)
+        if show_queue:
+            try:
+                await show_queue(self.queue_for_show())
+            except Exception:
+                logger.debug("Show queue update failed", exc_info=True)
         if not await self.hooks.progress(self.message()):
             self.cancelled = True
 
@@ -516,9 +530,19 @@ class LiveSession:
         action = await self.hooks.control()
         if action == "cancel":
             self.cancelled = True
-        elif action == "stop" and not self.ending:
-            logger.info("Live %s: stopped by the user", self.task_id)
+        elif action in {"stop", "stop_now"} and not self.stopped_by_user:
+            logger.info("Live %s: stopped by the user (%s)", self.task_id, action)
+            self.stopped_by_user = True
+            if action == "stop_now":
+                self.discard_queue = True
+                for record in self.state["clips"]:
+                    if record.get("status") == "queued":
+                        record["status"] = "cancelled"
+            if self.look_task and not self.look_task.done():
+                self.look_task.cancel()
             await self.finish_recording()
+            self.save()
+            await self.report(force=True)
         if self.cancelled:
             await self.stop_recording()
 
@@ -551,11 +575,15 @@ class LiveSession:
                         logger.info("Live %s: the stream is over", self.task_id)
                         self.ending = True
                 if self.ending and not (self.recorder and self.recorder.running):
+                    # After "Parar" nothing new is looked at: no need to wait
+                    # for the last pieces' transcriptions.
+                    if self.stopped_by_user:
+                        break
                     await self.take_closed_pieces()
                     if not self.pending:
                         break
                 await asyncio.sleep(self.poll_seconds)
-            if not self.cancelled:
+            if not self.cancelled and not self.stopped_by_user:
                 await self.collect_transcripts()
                 if self.look_task:
                     await self.look_task
@@ -571,6 +599,10 @@ class LiveSession:
                 if self.cancelled:
                     self.render_task.cancel()
                 await asyncio.gather(self.render_task, return_exceptions=True)
+            for record in self.state["clips"]:
+                if record.get("status") in {"queued", "rendering"}:
+                    record["status"] = "cancelled"
+            await self.report(force=True)
             for piece in list(self.pieces):
                 self.drop(piece)
             self.state["finished"] = True

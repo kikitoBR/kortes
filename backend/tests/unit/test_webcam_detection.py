@@ -52,6 +52,23 @@ def test_webcam_edges_find_the_overlay_not_bars_or_shelves():
     assert abs((y + h) - 230) <= 2
 
 
+def test_webcam_bottom_is_the_nearest_jump_not_the_hud_below():
+    # Under the webcam the game is calm; farther down an item name flashes
+    # (a bigger motion jump). The webcam still ends where the game starts.
+    grays = _stream_frames()
+    rng = np.random.default_rng(7)
+    for frame in grays:
+        calm = rng.uniform(0, 180, size=(70, 640)).astype(np.float32)
+        frame[230:300] = (calm + np.roll(calm, 1, axis=1) + np.roll(calm, 1, axis=0)) / 3
+        frame[300:315] = 30.0
+        flash = rng.uniform(0, 255, size=(25, 640)).astype(np.float32)
+        frame[315:340] = (flash + np.roll(flash, 1, axis=1) + np.roll(flash, 1, axis=0)) / 3
+    face = (455.0, 135.0, 36.0, 36.0)
+    (x, y, w, h), _ = wd.webcam_edges(grays, face, wd.box_around_face(face, 640, 360))
+    assert abs((y + h) - 230) <= 2
+    assert abs(y - 120) <= 2
+
+
 def test_box_around_face_stays_in_frame():
     x, y, w, h = wd.box_around_face((600.0, 5.0, 40.0, 40.0), 640, 360)
     assert x >= 0 and y >= 0 and x + w <= 640 and y + h <= 360

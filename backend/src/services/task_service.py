@@ -75,18 +75,6 @@ def clip_progress_message(index: int, total: int, failed: int) -> str:
     return message
 
 
-def clip_show_payload(segment: Dict[str, Any], output_format: str) -> Dict[str, Any]:
-    """What the page's assembly show draws while a clip is being made."""
-    words = str(segment.get("text") or "").split()
-    return {
-        "start_time": segment.get("start_time"),
-        "end_time": segment.get("end_time"),
-        "hook_title": segment.get("hook_title"),
-        "words": words[:40],
-        "layout": output_format,
-    }
-
-
 def clip_review_message(index: int, total: int) -> str:
     return f"Revisando o clipe {index + 1} de {total}..."
 
@@ -192,6 +180,7 @@ class TaskService(ClipEditingMixin):
         hook_intro: Optional[bool],
         clip_source: Optional[ClipSource],
         voice_energy: Optional[List[float]] = None,
+        show: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """One AI review of a finished clip; renders it again with the fixes.
 
@@ -230,6 +219,7 @@ class TaskService(ClipEditingMixin):
             webcam_region=webcam_region,
             hook_intro=hook_intro,
             clip_source=clip_source,
+            show=show,
         )
         if not fixed:
             logger.warning("Clip %d: render with the review fixes failed; keeping the first", index + 1)
@@ -399,7 +389,7 @@ class TaskService(ClipEditingMixin):
         progress_callback: Optional[Callable] = None,
         should_cancel: Optional[Callable] = None,
         clip_ready_callback: Optional[Callable] = None,
-        clip_started_callback: Optional[Callable] = None,
+        show_reporter: Optional[Any] = None,
         cleanup_settings: Optional[Dict[str, Any]] = None,
         webcam_region: Optional[Dict[str, float]] = None,
         hook_intro: Optional[bool] = None,
@@ -572,6 +562,25 @@ class TaskService(ClipEditingMixin):
             clip_ids = []
             failed_clips = 0
             render_start = perf_counter()
+            show = show_reporter
+            show_queue = [
+                {
+                    "n": index + 1,
+                    "start": seg.get("start_time"),
+                    "end": seg.get("end_time"),
+                    "title": seg.get("hook_title"),
+                    "status": "pronto" if index in reused else "na fila",
+                }
+                for index, seg in enumerate(segments_to_render)
+            ]
+
+            async def show_status(index: int, status: str) -> None:
+                if show is not None:
+                    show_queue[index]["status"] = status
+                    await show.set_queue(show_queue)
+
+            if show is not None:
+                await show.set_queue(show_queue)
 
             for i, segment in enumerate(segments_to_render):
                 # Check cancellation
@@ -589,13 +598,9 @@ class TaskService(ClipEditingMixin):
                     clip_progress,
                     clip_progress_message(i, total_clips, failed_clips),
                 )
-                if clip_started_callback:
-                    try:
-                        await clip_started_callback(
-                            i, total_clips, clip_show_payload(segment, output_format)
-                        )
-                    except Exception:
-                        logger.debug("Assembly show event failed", exc_info=True)
+                if show is not None:
+                    await show_status(i, "montando")
+                    await show.start_clip(i, total_clips, segment, output_format)
 
                 # Render single clip in thread pool
                 clip_info = await self.video_service.create_single_clip(
@@ -613,11 +618,14 @@ class TaskService(ClipEditingMixin):
                     webcam_region=webcam_region,
                     hook_intro=hook_intro,
                     clip_source=clip_source,
+                    show=show,
                 )
                 pending_clip_path = Path(clip_info["path"]) if clip_info else None
                 await check_cancelled()
                 if clip_info is not None and self.config.clip_review_enabled:
                     await update_progress(clip_progress, clip_review_message(i, total_clips))
+                    if show is not None:
+                        await show.clip(stage="revisao")
                     clip_info = await self._review_rendered_clip(
                         video_path,
                         segment,
@@ -637,10 +645,12 @@ class TaskService(ClipEditingMixin):
                         hook_intro=hook_intro,
                         clip_source=clip_source,
                         voice_energy=result.get("voice_energy"),
+                        show=show,
                     )
                     pending_clip_path = Path(clip_info["path"])
                     await check_cancelled()
                 if clip_info is None:
+                    await show_status(i, "falhou")
                     failed_clips += 1
                     logger.warning(
                         "Task %s: clip %d of %d failed and was skipped",
@@ -680,12 +690,18 @@ class TaskService(ClipEditingMixin):
                 clip_ids.append(clip_id)
 
                 # Notify frontend via SSE
-                if clip_ready_callback:
-                    clip_record = await self.clip_repo.get_clip_by_id(
-                        self.db, clip_id
+                clip_record = None
+                if clip_ready_callback or show is not None:
+                    clip_record = await self.clip_repo.get_clip_by_id(self.db, clip_id)
+                if clip_ready_callback and clip_record:
+                    await clip_ready_callback(i, total_clips, clip_record)
+                if show is not None:
+                    await show.clip(
+                        stage="pronto",
+                        video_url=(clip_record or {}).get("video_url"),
+                        filename=(clip_record or {}).get("filename"),
                     )
-                    if clip_record:
-                        await clip_ready_callback(i, total_clips, clip_record)
+                    await show_status(i, "pronto")
 
             stage_timings["render_seconds"] = round(
                 perf_counter() - render_start, 3
@@ -785,6 +801,8 @@ class TaskService(ClipEditingMixin):
                     logger.exception("Could not publish task failure for %s", task_id)
             raise
         finally:
+            if show_reporter is not None:
+                await show_reporter.finish()
             await run_in_thread(self._cleanup_source_video, video_path, source_type, url)
 
     async def _send_completion_notification_if_needed(

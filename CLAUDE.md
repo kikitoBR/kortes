@@ -115,8 +115,11 @@ and enqueues `watch_live` on the `supoclip_live` queue, served by the `live-work
 - **Watch:** while it runs the task page embeds the live and its chat (`components/app/live-watch.tsx`, official
   YouTube/Twitch/Kick players; `task.live_embed` saved at creation). `GET /tasks/live/snapshot?url=` grabs the
   stream's current frame (yt-dlp + ffmpeg) so the home page's webcam picker works for lives.
-- **Control:** `POST /tasks/{id}/live/stop` (Redis `live_stop:`) ends recording and still cuts the last moments;
-  recording also stops at the plan's YouTube duration limit. A restarted worker resumes (arq retries, state.json).
+- **Control:** `POST /tasks/{id}/live/stop` `{"discard_queue": bool}` sets Redis `live_stop:` (`"1"`, or `"now"` to
+  drop the queued moments) and `live_stop_requested` in the source metadata, so the page shows "Parando" at once
+  (`task.live_stopping`). The session stops recording on its next poll, makes no new AI looks, and finishes only the
+  clip in assembly (plus the queue unless discarded). Recording also stops at the plan's YouTube duration limit. A
+  restarted worker resumes (arq retries, state.json). The live worker runs blocking steps on a 32-thread executor.
 
 ### Frontend Architecture
 
@@ -316,12 +319,17 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
   `vertical_cam_float` (game full screen, webcam 480 px wide floating at 40,300 with a white border). `vertical_blur`
   puts the whole picture over a blurred fill. The editor mirrors them (`Framing.layout` `gameplay`/`float`,
   `camPosition`, `background: "blur"`).
-- `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders where per-pixel motion jumps from the static room to the moving game; ported from SHARINGAN, MIT). Letterbox bars are trimmed from the game crop via cropdetect. The clip editor keeps this layout: `Framing.layout = "gameplay"` + a `webcam` box (`editor_document.py`, `frontend/src/lib/editor/document.ts`; preview, browser export and server export share the same cut math), seeded at prepare time by `gameplay_framing()` in `editor_service.py` from the same planner
+- `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders at the first strong jump in per-pixel motion walking out from the face, from the static room to the moving game, so HUD text farther away is not taken for the border; ported from SHARINGAN, MIT). Letterbox bars are trimmed from the game crop via cropdetect. The clip editor keeps this layout: `Framing.layout = "gameplay"` + a `webcam` box (`editor_document.py`, `frontend/src/lib/editor/document.ts`; preview, browser export and server export share the same cut math), seeded at prepare time by `gameplay_framing()` in `editor_service.py` from the same planner
 - "Ganho inicial" (`hook_intro` per task; omitted = `HOOK_FIRST_TEASER` with a hard cut): the AI hook line plays first, then a 0.5 s tape-rewind beat (`media/hook_rewind.py`) paints over a placeholder range appended to the teaser, so durations, captions and source maps stay in sync (`timeline.hook_rewind_point`)
 - "Ajustar com IA": `POST /tasks/{id}/clips/{clip_id}/adjust` `{"instructions": "começa 3 s antes"}` → `ai.adjust_clip` returns new bounds/title/teaser (validated in `clip_review.apply_adjustment`, 15 s-3 min) and the clip is rendered again from the source (`ClipEditingMixin.adjust_clip_with_text`)
-- Assembly show ("Bastidores", `components/app/assembly-show.tsx`): a canvas on the processing task page where four
-  agent cursors build each clip in a phone. The worker publishes SSE `clip_started` (`clip_show_payload`: moment,
-  title, first words, layout) before each render; `clip_ready` then plays the real clip in the phone.
+- Assembly show ("Bastidores", `components/app/assembly-show.tsx`): the clip really being made, like an editor. The
+  render reports each stage through `ShowReporter` (`src/show.py`; Redis `show:{task}` + SSE `show`, read on page
+  load from `GET /tasks/{id}/show`): `momento` → `cortes` (ranges, teaser count, timed words, `words_per_line` from the
+  caption template) → `trecho` (section download) → `enquadramento` (a 480p silent preview of the real cut and a
+  filmstrip, served by `GET /tasks/{id}/show/{clip_key}/{preview.mp4|strip.jpg}`, plus the webcam/game regions) →
+  `render` → `revisao` → `pronto` (the saved clip), with the task's queue of moments. The page draws the preview in a
+  phone with the layout, title and captions, a timeline (title, filmstrip + source pieces, caption lines) that follows
+  the playhead, and a source monitor with the crops. Files live in `TEMP_DIR/show/<task>` until the next clip/task end.
 - Clip extras (on demand, nothing stored): `GET /tasks/{id}/clips/{clip_id}/cover[/suggest]` renders a cover JPEG (`media/covers.py`), `POST /tasks/{id}/clips/{clip_id}/post-texts` writes TikTok/Instagram/YouTube copy (`ai.generate_post_texts`, owner only)
 
 ## iOS App

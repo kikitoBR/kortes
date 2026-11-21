@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from contextlib import nullcontext
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -565,17 +566,23 @@ async def test_each_clip_announces_its_assembly_for_the_show():
     service.video_service.process_video_complete.return_value["segments_to_render"] = [
         {"start_time": "00:30", "end_time": "01:10", "hook_title": "Que susto", "text": "ele gritou muito alto"}
     ]
-    started = AsyncMock()
+    queues = []
+    service.clip_repo.get_clip_by_id = AsyncMock(return_value={"id": "clip-1", "filename": "clip-1.mp4"})
+    show = SimpleNamespace(
+        start_clip=AsyncMock(), clip=AsyncMock(), finish=AsyncMock(),
+        set_queue=AsyncMock(side_effect=lambda items: queues.append([i["status"] for i in items])),
+    )
     await service.process_task(
         task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube",
-        output_format="vertical_cam_float", clip_started_callback=started,
+        output_format="vertical_cam_float", show_reporter=show,
     )
-    index, total, payload = started.await_args.args
-    assert (index, total) == (0, 1)
-    assert payload == {
-        "start_time": "00:30", "end_time": "01:10", "hook_title": "Que susto",
-        "words": ["ele", "gritou", "muito", "alto"], "layout": "vertical_cam_float",
-    }
+    index, total, segment, layout = show.start_clip.await_args.args
+    assert (index, total, segment["hook_title"], layout) == (0, 1, "Que susto", "vertical_cam_float")
+    # The render gets the reporter, so the page sees the real cut being made.
+    assert service.video_service.create_single_clip.await_args.kwargs["show"] is show
+    assert queues == [["na fila"], ["montando"], ["pronto"]]
+    assert show.clip.await_args_list[-1].kwargs["stage"] == "pronto"
+    show.finish.assert_awaited_once()
 
 
 def test_reusable_clip_ids_match_order_and_moment():

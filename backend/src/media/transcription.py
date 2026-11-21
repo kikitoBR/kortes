@@ -563,7 +563,7 @@ def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
         return None
 
     try:
-        with open(cache_path, "r") as f:
+        with open(cache_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
             if "version" not in payload:
                 payload["version"] = TRANSCRIPT_CACHE_SCHEMA_VERSION

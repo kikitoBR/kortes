@@ -35,6 +35,8 @@ EDGE_DOMINANCE = 3.0
 # pixels on each side; the outside must move at least this much more.
 MOTION_WINDOW = 4
 MOTION_JUMP_MIN = 8.0
+# A nearer jump at least this share of the biggest one is the webcam border.
+NEAREST_JUMP_SHARE = 0.5
 # A face wider than this share of the frame means the whole video is the
 # camera (a podcast/talking head), not a webcam overlay.
 FULL_CAMERA_FACE_WIDTH = 0.2
@@ -168,9 +170,15 @@ def webcam_edges(
             return float(motion_profile[idx].mean()) if idx else float(motion_profile[k])
 
         jumps = np.array([window(k, step) - window(k, -step) for k in ks])
-        best_jump = int(np.argmax(jumps))
-        if jumps[best_jump] > MOTION_JUMP_MIN:
-            k = ks[best_jump]
+        if float(jumps.max()) > MOTION_JUMP_MIN:
+            # The border is the first strong jump walking out from the face: a
+            # farther, somewhat bigger one is the game itself (item names and
+            # HUD text that come and go below a top-corner webcam).
+            strong = max(MOTION_JUMP_MIN, float(jumps.max()) * NEAREST_JUMP_SHARE)
+            i = next(n for n, jump in enumerate(jumps) if jump >= strong)
+            while i + 1 < len(jumps) and jumps[i + 1] >= jumps[i]:
+                i += 1  # up to that jump's peak
+            k = ks[i]
             # Snap to the sharpest steady edge right next to the jump.
             near = [n for n in ks if abs(n - k) <= 2 and strength[n] > 0]
             sides_found += 1

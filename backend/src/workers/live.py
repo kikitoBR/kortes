@@ -50,6 +50,7 @@ class ProductionLiveHooks:
     """The live session's link to yt-dlp, the AI, the renderer, the DB and Redis."""
 
     def __init__(self, ctx: Dict[str, Any], task_id: str, url: str, options, processing_mode: str):
+        from ..show import ShowReporter
         from ..workers.progress import ProgressTracker
 
         self.redis = ctx["redis"]
@@ -58,6 +59,7 @@ class ProductionLiveHooks:
         self.options = options
         self.processing_mode = processing_mode
         self.tracker = ProgressTracker(ctx["redis"], task_id)
+        self.show = ShowReporter(ctx["redis"], task_id)
 
     async def probe(self):
         from ..live.capture import probe_live
@@ -99,23 +101,23 @@ class ProductionLiveHooks:
         info = await VideoService.create_single_clip(
             timing, segment, index, output_dir, *render_options,
             webcam_region=webcam_region, hook_intro=self.options.hook_intro, clip_source=clip_source,
+            show=self.show,
         )
         if info and config.clip_review_enabled:
+            await self.show.clip(stage="revisao")
             info = await TaskService(db=None)._review_rendered_clip(
                 timing, segment, info, index, output_dir,
                 render_options=render_options, webcam_region=webcam_region,
                 hook_intro=self.options.hook_intro, clip_source=clip_source, voice_energy=voice_energy,
+                show=self.show,
             )
         return info
 
     async def clip_started(self, index: int, segment: Dict[str, Any]) -> None:
-        await self.tracker.clip_started(index, 0, {
-            "start_time": segment.get("start_time"),
-            "end_time": segment.get("end_time"),
-            "hook_title": segment.get("hook_title"),
-            "words": segment.get("words") or [],
-            "layout": segment.get("layout"),
-        })
+        await self.show.start_clip(index, 0, segment, self.options.output_format)
+
+    async def show_queue(self, items: List[Dict[str, Any]]) -> None:
+        await self.show.set_queue(items)
 
     async def save_clip(self, info: Dict[str, Any], order: int) -> Optional[str]:
         from ..database import AsyncSessionLocal
@@ -154,6 +156,7 @@ class ProductionLiveHooks:
             record = await service.clip_repo.get_clip_by_id(db, clip_id)
         if record:
             await self.tracker.clip_ready(next_order - 1, 0, record)
+            await self.show.clip(stage="pronto", video_url=record.get("video_url"), filename=record.get("filename"))
         return clip_id
 
     async def progress(self, message: str) -> bool:
@@ -173,8 +176,9 @@ class ProductionLiveHooks:
     async def control(self) -> Optional[str]:
         if await self.redis.get(f"task_cancel:{self.task_id}"):
             return "cancel"
-        if await self.redis.get(f"live_stop:{self.task_id}"):
-            return "stop"
+        stop = await self.redis.get(f"live_stop:{self.task_id}")
+        if stop:
+            return "stop_now" if stop in (b"now", "now") else "stop"
         return None
 
 
@@ -222,6 +226,7 @@ async def watch_live(
 
     clips, minutes = result.get("clips", 0), round(result.get("recorded_seconds", 0) / 60)
     if result["status"] == "cancelled":
+        await hooks.show.finish()
         return result
     if result["status"] in {"not_live", "error"} and not clips:
         message = (
@@ -245,14 +250,30 @@ async def watch_live(
             expected_statuses=["queued", "processing"],
         )
     await tracker.update(progress, message, status)
+    await hooks.show.finish()
     await ctx["redis"].delete(f"live_stop:{task_id}")
     return result
+
+
+async def startup(ctx: Dict[str, Any]) -> None:
+    """Room for every live's transcriptions, render and recording at once.
+
+    The default thread pool is sized from the CPU count; on a small VPS the
+    long transcriptions and renders filled it and the loop that reads "Parar"
+    waited its turn.
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=32))
 
 
 class LiveWorkerSettings:
     """arq settings for the live worker (its own queue and container)."""
 
     from arq.connections import RedisSettings
+
+    on_startup = startup
 
     config = Config()
     functions = [func(watch_live, max_tries=LIVE_MAX_TRIES)]

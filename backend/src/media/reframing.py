@@ -1497,8 +1497,13 @@ def render_reframed_clip_ffmpeg(
     speaker_turns: Optional[List[Dict[str, Any]]] = None,
     speaker_words: Optional[List[Dict[str, Any]]] = None,
     webcam_region: Optional[Dict[str, float]] = None,
+    gameplay_regions: Optional[Dict[str, Dict[str, int]]] = None,
+    gameplay_checked: bool = False,
 ) -> Tuple[bool, int, int]:
     """Render the final framed clip and (optionally) burn subtitles in one pass.
+
+    ``gameplay_checked`` means the caller already looked for the webcam
+    (``gameplay_regions``, None when there is none), so it is not detected twice.
 
     Collapsing reframing + subtitle burn into a single encode avoids a whole
     generation of re-encode loss. The pass uses the high-quality profile, CFR
@@ -1554,7 +1559,7 @@ def render_reframed_clip_ffmpeg(
         logger.warning("Blurred-background render failed; using default vertical framing")
 
     if output_format in WEBCAM_OUTPUT_FORMATS:
-        regions = detect_gameplay_plan(input_path, webcam_region)
+        regions = gameplay_regions if gameplay_checked else detect_gameplay_plan(input_path, webcam_region)
         if regions:
             layout_filter = (
                 build_cam_float_filter(regions, width, height, subs)

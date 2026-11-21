@@ -1,5 +1,11 @@
 """Video utils helpers for the video pipeline."""
 
+import threading
+from typing import Callable
+
+from .media.common import WEBCAM_OUTPUT_FORMATS
+from .media.reframing import detect_gameplay_plan
+from .show import make_preview_assets
 from .media.common import (
     Any,
     Dict,
@@ -267,6 +273,9 @@ def create_optimized_clip(
     webcam_region: Optional[Dict[str, float]] = None,
     hook_rewind: bool = False,
     render_source: Optional[Tuple[Path, float]] = None,
+    show_hook: Optional[Callable[..., None]] = None,
+    show_dir: Optional[Path] = None,
+    show_url: Optional[Callable[[str], str]] = None,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
 
@@ -376,6 +385,32 @@ def create_optimized_clip(
                 output_format if output_format in VALID_OUTPUT_FORMATS else "vertical"
             )
 
+            # The page's assembly show: a light preview of this very cut,
+            # made alongside the final encode so the clip is not delayed.
+            preview_thread: Optional[threading.Thread] = None
+            if show_hook:
+                show_hook(stage="enquadramento")
+                if show_dir and show_url:
+                    def preview_job():
+                        try:
+                            extra = make_preview_assets(source_clip_path, show_dir)
+                            show_hook(preview=show_url("preview.mp4"), strip=show_url("strip.jpg"), **extra)
+                        except Exception:
+                            logger.debug("Show preview failed", exc_info=True)
+
+                    preview_thread = threading.Thread(target=preview_job, daemon=True)
+                    preview_thread.start()
+            gameplay_regions = None
+            gameplay_checked = reframe_format in WEBCAM_OUTPUT_FORMATS
+            if gameplay_checked:
+                gameplay_regions = detect_gameplay_plan(source_clip_path, webcam_region)
+                if show_hook and gameplay_regions:
+                    width, height = ffprobe_video_size(source_clip_path)
+                    show_hook(regions={
+                        name: {k: round(box[k] / (width if k in ("x", "w") else height), 4) for k in ("x", "y", "w", "h")}
+                        for name, box in gameplay_regions.items()
+                    })
+
             # Output dimensions are known ahead of the render: vertical modes are
             # always 1080x1920, "original" keeps the (even) source size. Knowing
             # them lets us build the ASS captions up front and burn them in the
@@ -418,6 +453,8 @@ def create_optimized_clip(
                 except Exception as exc:
                     logger.warning("Speaker turn extraction failed: %s", exc)
 
+            if show_hook:
+                show_hook(stage="render")
             framed_ok, _, _ = render_reframed_clip_ffmpeg(
                 source_clip_path,
                 final_clip_path,
@@ -427,7 +464,11 @@ def create_optimized_clip(
                 speaker_turns=speaker_turns,
                 speaker_words=speaker_words,
                 webcam_region=webcam_region,
+                gameplay_regions=gameplay_regions,
+                gameplay_checked=gameplay_checked,
             )
+            if preview_thread:
+                preview_thread.join(timeout=120)  # it reads the cut before cleanup
             if not framed_ok:
                 raise RuntimeError("ffmpeg reframe render failed")
 

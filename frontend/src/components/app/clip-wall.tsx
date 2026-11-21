@@ -231,20 +231,22 @@ function stepFromMessage(message: string) {
 }
 
 /** A live being recorded: no steps, clips arrive while the stream goes on. */
-function LivePanel({ message, readyCount, status }: { message: string; readyCount: number; status: string }) {
+function LivePanel({ message, readyCount, status, stopping }: { message: string; readyCount: number; status: string; stopping?: boolean }) {
   return (
     <section className="overflow-hidden rounded-2xl border bg-background p-5 sm:p-6" aria-live="polite">
       <div className="flex items-start gap-3">
-        <span className="mt-1 inline-flex shrink-0 items-center gap-1.5 rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
+        <span className={`mt-1 inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white ${stopping ? "bg-stone-600" : "bg-red-600"}`}>
           <span className="size-1.5 rounded-full bg-white motion-safe:animate-pulse" />
-          Ao vivo
+          {stopping ? "Parando" : "Ao vivo"}
         </span>
         <div className="min-w-0">
           <p className="text-lg font-semibold">{message || (status === "queued" ? "Conectando na live..." : "Assistindo a live")}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {readyCount > 0
-              ? "Os cortes aparecem aqui enquanto a live acontece. Pare quando quiser: os últimos momentos ainda viram corte."
-              : "A IA está ouvindo a live. Cada momento forte vira corte em poucos minutos."}
+            {stopping
+              ? "A gravação parou. Os cortes que já estavam em montagem terminam e aparecem aqui."
+              : readyCount > 0
+                ? "Os cortes aparecem aqui enquanto a live acontece. Pare quando quiser."
+                : "A IA está ouvindo a live. Cada momento forte vira corte em poucos minutos."}
           </p>
         </div>
       </div>
@@ -252,8 +254,8 @@ function LivePanel({ message, readyCount, status }: { message: string; readyCoun
   );
 }
 
-export function ProcessingPanel({ status, progress, message, readyCount, live = false }: { status: string; progress: number; message: string; readyCount: number; live?: boolean }) {
-  if (live) return <LivePanel message={message} readyCount={readyCount} status={status} />;
+export function ProcessingPanel({ status, progress, message, readyCount, live = false, stopping = false }: { status: string; progress: number; message: string; readyCount: number; live?: boolean; stopping?: boolean }) {
+  if (live) return <LivePanel message={message} readyCount={readyCount} status={status} stopping={stopping} />;
   const byProgress = STEPS.findIndex((step) => progress < step.until);
   const activeStep = status === "queued" ? -1 : stepFromMessage(message) ?? (byProgress === -1 ? STEPS.length - 1 : byProgress);
   return (

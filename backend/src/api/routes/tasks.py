@@ -750,6 +750,7 @@ async def get_task(
             from ...live.capture import live_embed
 
             task["live_embed"] = metadata.get("live_embed") or live_embed(task.get("source_url") or "")
+            task["live_stopping"] = bool(metadata.get("live_stop_requested"))
         return task
 
     except HTTPException:
@@ -757,6 +758,49 @@ async def get_task(
     except Exception as e:
         logger.error(f"Error retrieving task: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao carregar a tarefa: {str(e)}")
+
+
+@router.get("/{task_id}/show")
+async def get_task_show(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """The clip being assembled right now and the queue behind it."""
+    from ...show import read_show_state
+
+    task_service = TaskService(db)
+    await _require_task_reader(request, task_service, db, task_id)
+    await db.close()
+    runtime_config = get_config()
+    redis_client = redis.Redis(
+        host=runtime_config.redis_host,
+        port=runtime_config.redis_port,
+        password=runtime_config.redis_password,
+        decode_responses=True,
+    )
+    try:
+        return await read_show_state(redis_client, task_id)
+    finally:
+        await redis_client.aclose()
+
+
+@router.get("/{task_id}/show/{clip_key}/{asset}")
+async def get_task_show_asset(
+    task_id: str, clip_key: str, asset: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """The live preview of the cut being made, and its filmstrip."""
+    from ...show import show_dir
+
+    task_service = TaskService(db)
+    await _require_task_reader(request, task_service, db, task_id)
+    await db.close()
+    if asset not in {"preview.mp4", "strip.jpg"} or not re.fullmatch(r"c\d{3}-[0-9a-f]{8}", clip_key):
+        raise HTTPException(status_code=404, detail="Prévia não encontrada")
+    path = show_dir(task_id) / clip_key / asset
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Prévia não encontrada")
+    return FileResponse(
+        path,
+        media_type="video/mp4" if asset.endswith(".mp4") else "image/jpeg",
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/{task_id}/clips")
@@ -1483,6 +1527,11 @@ async def stop_live(task_id: str, request: Request, db: AsyncSession = Depends(g
         raise HTTPException(status_code=400, detail="Esta tarefa não é uma live")
     if task.get("status") not in {"queued", "processing"}:
         return {"message": "A live já terminou"}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    discard = isinstance(payload, dict) and payload.get("discard_queue") is True
     runtime_config = get_config()
     redis_client = redis.Redis(
         host=runtime_config.redis_host,
@@ -1491,10 +1540,21 @@ async def stop_live(task_id: str, request: Request, db: AsyncSession = Depends(g
         decode_responses=True,
     )
     try:
-        await redis_client.setex(f"live_stop:{task_id}", 86400, "1")
+        await redis_client.setex(f"live_stop:{task_id}", 86400, "now" if discard else "1")
     finally:
         await redis_client.aclose()
-    return {"message": "Parando a live. Os últimos momentos ainda viram corte."}
+    # The page shows the stop right away, before the worker's next update.
+    metadata = await _load_task_source_metadata(task_id, db=db)
+    await _save_task_source_metadata(task_id, {**metadata, "live_stop_requested": True}, db=db)
+    message = (
+        "Gravação parada · terminando o corte que já estava em montagem"
+        if discard
+        else "Gravação parada · terminando os cortes que já estavam na fila"
+    )
+    await task_service.task_repo.update_task_status(
+        db, task_id, "processing", progress_message=message, expected_statuses=["processing"],
+    )
+    return {"message": message}
 
 
 @router.get("/metrics/performance")
@@ -1586,6 +1646,7 @@ async def resume_task(
                     )
                     processing_job_id = f"{task_id}:{secrets.token_hex(16)}"
                     metadata["processing_job_id"] = processing_job_id
+                    metadata.pop("live_stop_requested", None)
                     await _save_task_source_metadata(task_id, metadata, db=db)
                     job_id = await _enqueue_live_job(
                         task_id, source_url, task["user_id"], processing_job_id,

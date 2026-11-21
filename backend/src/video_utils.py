@@ -403,7 +403,7 @@ def create_optimized_clip(
             return True
 
     except Exception as e:
-        logger.error(f"Failed to create clip: {e}")
+        logger.error(f"Failed to create clip: {e}", exc_info=True)
         return False
 
 

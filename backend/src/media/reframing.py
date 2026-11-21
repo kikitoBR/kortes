@@ -1494,8 +1494,12 @@ def render_reframed_clip_ffmpeg(
                 "-movflags", "+faststart",
                 str(output_path),
             ]
-            return run_ffmpeg_command(command).returncode == 0, 1080, 1920
-        logger.info("No facecam found for gameplay layout; using default vertical framing")
+            if run_ffmpeg_command(command).returncode == 0:
+                return True, 1080, 1920
+            # A broken layout must not cost the clip: render it framed normally.
+            logger.warning("Gameplay layout render failed; using default vertical framing")
+        else:
+            logger.info("No facecam found for gameplay layout; using default vertical framing")
 
     if output_format == "vertical_pan" and speaker_words:
         speaker_chain = build_diarized_speaker_chain(

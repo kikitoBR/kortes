@@ -324,6 +324,52 @@ def subtitles_filter_fragment(
     return fragment
 
 
+# Ranges closer than this in source order are cut from one seeked input window.
+SOURCE_WINDOW_GAP_SECONDS = 20.0
+
+
+def plan_source_windows(
+    keep_ranges: List[Tuple[float, float]],
+    max_gap: float = SOURCE_WINDOW_GAP_SECONDS,
+) -> Tuple[List[Tuple[float, float]], List[Tuple[int, float, float]]]:
+    """Seekable input windows for ranges cut out of a (possibly hours-long) source.
+
+    Trimming ranges out of a single full input decodes the whole source up to
+    the last range, which on a long livestream takes longer than the render
+    timeout. When ranges play out of source order (a hook teaser before the
+    clip), every frame of the earlier ranges also waits in memory until concat
+    reaches them. Each window is therefore its own input, opened with a fast
+    ``-ss`` seek. Ranges that follow each other closely in source order share
+    a window; an out-of-order range or a long gap starts a new one.
+
+    Returns the windows as (start, end) source seconds and, for every range in
+    play order, (window index, start, end) relative to its window.
+    """
+    windows: List[List[float]] = []
+    owners: List[int] = []
+    for start, end in keep_ranges:
+        if windows and windows[-1][1] - 0.001 <= start <= windows[-1][1] + max_gap:
+            windows[-1][1] = max(windows[-1][1], end)
+        else:
+            windows.append([start, end])
+        owners.append(len(windows) - 1)
+    placed = [
+        (owner, start - windows[owner][0], end - windows[owner][0])
+        for owner, (start, end) in zip(owners, keep_ranges)
+    ]
+    return [(start, end) for start, end in windows], placed
+
+
+def source_window_input_args(
+    video_path: Path, windows: List[Tuple[float, float]]
+) -> List[str]:
+    """ffmpeg ``-ss/-t/-i`` arguments opening one input per source window."""
+    args: List[str] = []
+    for start, end in windows:
+        args += ["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(video_path)]
+    return args
+
+
 def crossfade_fade_for_ranges(keep_ranges: List[Tuple[float, float]]) -> float:
     """Crossfade duration render_source_ranges will use, or 0.0 for hard concat.
 
@@ -367,16 +413,17 @@ def render_ranges_crossfade_ffmpeg(
         return False
     has_audio = audio_stream is not None
     fps = output_fps_for(video_path)
+    windows, placed = plan_source_windows(keep_ranges)
 
     parts: List[str] = []
-    for idx, (start, end) in enumerate(keep_ranges):
+    for idx, (window, start, end) in enumerate(placed):
         parts.append(
-            f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
+            f"[{window}:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,"
             f"fps={fps},format=yuv420p,setsar=1[v{idx}]"
         )
         if has_audio:
             parts.append(
-                f"[0:a:{audio_stream}]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]"
+                f"[{window}:a:{audio_stream}]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]"
             )
 
     cur_v = "[v0]"
@@ -401,7 +448,7 @@ def render_ranges_crossfade_ffmpeg(
         map_args += ["-map", cur_a]
 
     command = [
-        "ffmpeg", "-y", "-i", str(video_path),
+        "ffmpeg", "-y", *source_window_input_args(video_path, windows),
         "-filter_complex", ";".join(parts),
         *map_args,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", str(INTERMEDIATE_CRF),
@@ -465,16 +512,17 @@ def render_source_ranges_ffmpeg(
             return True
         logger.info("Crossfade stitch failed; falling back to hard concat")
 
+    windows, placed = plan_source_windows(keep_ranges)
     filter_parts: List[str] = []
     concat_inputs: List[str] = []
-    for idx, (start, end) in enumerate(keep_ranges):
+    for idx, (window, start, end) in enumerate(placed):
         filter_parts.append(
-            f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{idx}]"
+            f"[{window}:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{idx}]"
         )
         concat_inputs.append(f"[v{idx}]")
         if has_audio:
             filter_parts.append(
-                f"[0:a:{audio_stream}]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]"
+                f"[{window}:a:{audio_stream}]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{idx}]"
             )
             concat_inputs.append(f"[a{idx}]")
 
@@ -492,8 +540,7 @@ def render_source_ranges_ffmpeg(
     command = [
         "ffmpeg",
         "-y",
-        "-i",
-        str(video_path),
+        *source_window_input_args(video_path, windows),
         "-filter_complex",
         ";".join(filter_parts),
         *map_args,

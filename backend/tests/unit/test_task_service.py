@@ -78,6 +78,8 @@ def build_task_service() -> TaskService:
     service.task_repo.update_task_clips = AsyncMock()
     service.task_repo.get_task_notification_context = AsyncMock(return_value=None)
     service.clip_repo.delete_clips_by_task = AsyncMock(return_value=0)
+    service.clip_repo.get_clips_by_task = AsyncMock(return_value=[])
+    service.clip_repo.delete_clip = AsyncMock()
     service.clip_repo.create_clip = AsyncMock(return_value="clip-1")
     service.video_service.create_single_clip = AsyncMock(return_value=build_clip_result())
     service.video_service.apply_single_transition = AsyncMock(
@@ -421,16 +423,91 @@ async def test_process_task_clears_existing_clips_before_rendering():
         }
     )
 
+    service.clip_repo.get_clips_by_task = AsyncMock(
+        return_value=[{"id": "old-1", "clip_order": 1, "start_time": "00:05", "end_time": "00:15"}]
+    )
+
     await service.process_task(
         task_id="task-1",
         url="https://www.youtube.com/watch?v=demo",
         source_type="youtube",
     )
 
-    service.clip_repo.delete_clips_by_task.assert_awaited_once_with(service.db, "task-1")
+    # The earlier clip covers other moments, so it is replaced, not kept.
+    service.clip_repo.delete_clip.assert_awaited_once_with(service.db, "old-1")
     assert any(
         call.args == (service.db, "task-1", [])
         for call in service.task_repo.update_task_clips.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_task_rerun_keeps_clips_already_rendered():
+    service = build_task_service()
+    segments = [
+        {"start_time": "00:00", "end_time": "00:10"},
+        {"start_time": "00:20", "end_time": "00:30"},
+        {"start_time": "00:40", "end_time": "00:50"},
+    ]
+    service.video_service.process_video_complete.return_value["segments_to_render"] = segments
+    service.clip_repo.get_clips_by_task = AsyncMock(return_value=[
+        {"id": "done-1", "clip_order": 1, "start_time": "00:00", "end_time": "00:10"},
+        {"id": "stale-2", "clip_order": 2, "start_time": "00:21", "end_time": "00:30"},
+    ])
+    service.clip_repo.create_clip = AsyncMock(side_effect=["new-2", "new-3"])
+
+    result = await service.process_task(
+        task_id="task-1",
+        url="https://www.youtube.com/watch?v=demo",
+        source_type="youtube",
+    )
+
+    assert result["clips_count"] == 3
+    rendered = [call.args[2] for call in service.video_service.create_single_clip.await_args_list]
+    assert rendered == [1, 2]
+    service.clip_repo.delete_clip.assert_awaited_once_with(service.db, "stale-2")
+    assert service.task_repo.update_task_clips.await_args_list[0].args == (service.db, "task-1", ["done-1"])
+    assert service.task_repo.update_task_clips.await_args_list[-1].args == (
+        service.db, "task-1", ["done-1", "new-2", "new-3"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_task_reports_skipped_clips_in_progress():
+    service = build_task_service()
+    service.video_service.process_video_complete.return_value["segments_to_render"] = [
+        {"start_time": "00:00", "end_time": "00:10"},
+        {"start_time": "00:20", "end_time": "00:30"},
+    ]
+    service.video_service.create_single_clip = AsyncMock(side_effect=[None, build_clip_result()])
+
+    await service.process_task(
+        task_id="task-1",
+        url="https://www.youtube.com/watch?v=demo",
+        source_type="youtube",
+    )
+
+    messages = [
+        call.kwargs.get("progress_message")
+        for call in service.task_repo.update_task_status.await_args_list
+    ]
+    assert "Criando o clipe 1 de 2..." in messages
+    assert "Criando o clipe 2 de 2... 1 falhou e foi pulado." in messages
+
+
+def test_reusable_clip_ids_match_order_and_moment():
+    segments = [
+        {"start_time": "00:00", "end_time": "00:10"},
+        {"start_time": "00:20", "end_time": "00:30"},
+    ]
+    existing = [
+        {"id": "a", "clip_order": 1, "start_time": "00:00", "end_time": "00:10"},
+        {"id": "b", "clip_order": 3, "start_time": "00:20", "end_time": "00:30"},
+    ]
+    assert task_service_module.reusable_clip_ids(existing, segments) == {0: "a"}
+    assert task_service_module.reusable_clip_ids([], segments) == {}
+    assert task_service_module.clip_progress_message(4, 10, 3) == (
+        "Criando o clipe 5 de 10... 3 falharam e foram pulados."
     )
 
 

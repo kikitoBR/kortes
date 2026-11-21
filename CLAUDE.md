@@ -92,7 +92,7 @@ utils/               → Thread pool helpers for blocking operations (async_help
    - Optional transition effects (`backend/transitions/`)
    - Optional B-roll overlays (Pexels API)
    - Caption templates with animation styles
-5. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL
+5. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL. Each clip is saved and pushed to the page (SSE `clip_ready`) as soon as it renders; a failed clip is skipped and counted in the progress line. A rerun of the same task (worker restart, "Retomar") keeps clips already rendered for the same moments (`reusable_clip_ids` in `task_service.py`)
 
 ### Frontend Architecture
 

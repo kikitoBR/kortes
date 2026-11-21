@@ -111,3 +111,32 @@ def test_gameplay_render_stacks_cam_over_game():
     assert f"scale=1080:{reframing.GAMEPLAY_CAM_H}" in graph
     assert f"scale=1080:{reframing.GAMEPLAY_GAME_H}" in graph
     assert "[cv][gv]vstack" in graph
+
+
+def test_failed_gameplay_render_falls_back_to_default_framing():
+    commands = []
+
+    class _Result:
+        def __init__(self, code):
+            self.returncode = code
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        return _Result(1 if len(commands) == 1 else 0)
+
+    regions = reframing.compute_gameplay_regions(1920, 1080, _faces(300, 250, 110))
+    with (
+        patch.object(reframing, "ffprobe_video_size", return_value=(1920, 1080)),
+        patch.object(reframing, "ffprobe_has_audio", return_value=True),
+        patch.object(reframing, "output_fps_for", return_value=30),
+        patch.object(reframing, "detect_gameplay_plan", return_value=regions),
+        patch.object(reframing, "build_vertical_filter_plan", return_value=("crop=608:1080:656:0", "simple")),
+        patch.object(reframing, "run_ffmpeg_command", side_effect=fake_run),
+    ):
+        ok, w, h = reframing.render_reframed_clip_ffmpeg(
+            Path("in.mp4"), Path("out.mp4"), "vertical_gameplay"
+        )
+
+    assert (ok, w, h) == (True, 1080, 1920)
+    assert len(commands) == 2
+    assert "vstack" not in " ".join(commands[1])

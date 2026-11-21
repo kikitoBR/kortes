@@ -382,7 +382,7 @@ class VideoService:
                 "keep_ranges": keep_ranges,
             }
         except Exception as e:
-            logger.error(f"Error creating clip {clip_index + 1}: {e}")
+            logger.error(f"Error creating clip {clip_index + 1}: {e}", exc_info=True)
             return None
 
     @staticmethod

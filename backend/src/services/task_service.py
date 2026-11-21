@@ -3,7 +3,7 @@ Task service - orchestrates task creation and processing workflow.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +38,38 @@ from ..repositories.media_repository import queue_delete, guard_source_creation
 
 logger = logging.getLogger(__name__)
 PROCESSING_CACHE_VERSION = "20260319_grounded_segments_v1"
+
+
+def reusable_clip_ids(
+    existing_clips: List[Dict[str, Any]], segments: List[Dict[str, Any]]
+) -> Dict[int, str]:
+    """Segment index -> clip an earlier run of this task already rendered for it.
+
+    A rerun (worker restart mid-render, or "Retomar") keeps those clips and
+    renders only the missing ones instead of starting the whole batch over.
+    """
+    by_order = {clip.get("clip_order"): clip for clip in existing_clips}
+    kept: Dict[int, str] = {}
+    for index, segment in enumerate(segments):
+        clip = by_order.get(index + 1)
+        if (
+            clip
+            and clip.get("id")
+            and clip.get("start_time") == segment.get("start_time")
+            and clip.get("end_time") == segment.get("end_time")
+        ):
+            kept[index] = str(clip["id"])
+    return kept
+
+
+def clip_progress_message(index: int, total: int, failed: int) -> str:
+    """Render-stage progress line; says how many clips were skipped so far."""
+    message = f"Criando o clipe {index + 1} de {total}..."
+    if failed == 1:
+        message += " 1 falhou e foi pulado."
+    elif failed > 1:
+        message += f" {failed} falharam e foram pulados."
+    return message
 
 
 class TaskService(ClipEditingMixin):
@@ -409,19 +441,36 @@ class TaskService(ClipEditingMixin):
             clips_output_dir = Path(self.config.temp_dir) / "clips"
             clips_output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Retries and regenerations should replace earlier clip rows instead of
-            # accumulating duplicates for the same task.
+            # A rerun of this task (worker restart, "Retomar") keeps the clips an
+            # earlier run already finished for the same moments; every other
+            # earlier row is replaced so clips never pile up as duplicates.
             async with self._processing_transaction(task_id):
                 await check_cancelled()
-                await self.clip_repo.delete_clips_by_task(self.db, task_id)
-                await self.task_repo.update_task_clips(self.db, task_id, [])
+                existing_clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
+                reused = reusable_clip_ids(existing_clips, segments_to_render)
+                kept_ids = set(reused.values())
+                for clip in existing_clips:
+                    if str(clip["id"]) not in kept_ids:
+                        await self.clip_repo.delete_clip(self.db, clip["id"])
+                await self.task_repo.update_task_clips(
+                    self.db, task_id, [reused[index] for index in sorted(reused)]
+                )
+            if reused:
+                logger.info(
+                    "Task %s: keeping %d clip(s) from an earlier run", task_id, len(reused)
+                )
 
             clip_ids = []
+            failed_clips = 0
             render_start = perf_counter()
 
             for i, segment in enumerate(segments_to_render):
                 # Check cancellation
                 await check_cancelled()
+
+                if i in reused:
+                    clip_ids.append(reused[i])
+                    continue
 
                 # Update progress: 70-95% spread across clips
                 clip_progress = 70 + int(
@@ -429,7 +478,7 @@ class TaskService(ClipEditingMixin):
                 ) if total_clips > 0 else 95
                 await update_progress(
                     clip_progress,
-                    f"Criando o clipe {i + 1} de {total_clips}...",
+                    clip_progress_message(i, total_clips, failed_clips),
                 )
 
                 # Render single clip in thread pool
@@ -451,7 +500,12 @@ class TaskService(ClipEditingMixin):
                 pending_clip_path = Path(clip_info["path"]) if clip_info else None
                 await check_cancelled()
                 if clip_info is None:
-                    continue  # Skip failed clip
+                    failed_clips += 1
+                    logger.warning(
+                        "Task %s: clip %d of %d failed and was skipped",
+                        task_id, i + 1, total_clips,
+                    )
+                    continue
 
                 async with self._processing_transaction(task_id):
                     await check_cancelled()

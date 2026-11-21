@@ -61,15 +61,8 @@ def parse_rms_levels(output: str) -> List[float]:
     return levels
 
 
-def measure_voice_energy(media_path: Path) -> List[float]:
-    """RMS level (dB) of every second of the source's audio.
-
-    Kept inside the transcript cache, so it is measured once per video and
-    survives the cleanup of the downloaded media.
-    """
-    cached = (load_cached_transcript_data(media_path) or {}).get("voice_energy_db")
-    if isinstance(cached, list) and cached:
-        return [float(v) for v in cached]
+def measure_levels(media_path: Path) -> List[float]:
+    """RMS level (dB) of every second of a file's audio, measured now."""
     if not Path(media_path).exists():
         return []
     stream = select_audio_stream_index(media_path)
@@ -91,7 +84,19 @@ def measure_voice_energy(media_path: Path) -> List[float]:
     if result.returncode != 0:
         logger.warning("Voice energy measurement failed for %s", media_path)
         return []
-    levels = [round(v, 1) for v in parse_rms_levels(result.stdout)]
+    return [round(v, 1) for v in parse_rms_levels(result.stdout)]
+
+
+def measure_voice_energy(media_path: Path) -> List[float]:
+    """RMS level (dB) of every second of the source's audio.
+
+    Kept inside the transcript cache, so it is measured once per video and
+    survives the cleanup of the downloaded media.
+    """
+    cached = (load_cached_transcript_data(media_path) or {}).get("voice_energy_db")
+    if isinstance(cached, list) and cached:
+        return [float(v) for v in cached]
+    levels = measure_levels(media_path)
     if levels:
         update_transcript_cache(media_path, voice_energy_db=levels)
         logger.info("Measured voice energy: %d seconds", len(levels))

@@ -205,6 +205,71 @@ async def _save_task_source_metadata(
         await redis_client.aclose()
 
 
+async def _detect_live_stream(url: str, *, requested: bool = False, quiet: bool = False):
+    """The live stream behind a link, or None when it is not live now.
+
+    Twitch and Kick links are always treated as live channels; YouTube links
+    only when asked (or when the video has no duration yet).
+    """
+    from ...live.capture import live_platform, probe_live
+
+    platform = live_platform(url)
+    if platform is None or (platform == "youtube" and not requested):
+        return None
+    if not get_config().live_clipping_enabled:
+        if platform == "youtube" and quiet:
+            return None
+        raise HTTPException(status_code=422, detail="O corte de lives ao vivo está desligado neste servidor.")
+    try:
+        stream = await asyncio.wait_for(run_in_thread(probe_live, url), timeout=60)
+    except Exception as exc:
+        logger.warning("Live probe failed for %s: %s", url, exc)
+        if quiet:
+            return None
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "LIVE_UNAVAILABLE",
+                "message": "Não consegui abrir essa live agora. Tente de novo em instantes. Nenhuma geração foi usada.",
+            },
+        ) from None
+    if stream.is_live and stream.inputs:
+        return stream
+    if quiet:
+        return None
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "LIVE_NOT_ON_AIR",
+            "message": "Esse canal não está ao vivo agora. Cole o link quando a live começar. Nenhuma geração foi usada.",
+        },
+    )
+
+
+async def _assert_live_capacity(db: AsyncSession) -> None:
+    active = await TaskRepository.count_active_live_tasks(db)
+    if active >= get_config().live_max_concurrent:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "LIVE_CAPACITY",
+                "message": "Já há lives demais sendo cortadas agora. Tente de novo em alguns minutos. Nenhuma geração foi usada.",
+            },
+        )
+
+
+async def _enqueue_live_job(
+    task_id: str, url: str, user_id: str, job_id: str, *, title: str, processing_mode: str,
+    options: Dict[str, Any],
+) -> str:
+    from ...workers.live import LIVE_QUEUE_NAME
+
+    return await JobQueue.enqueue_job(
+        "watch_live", task_id, url, user_id, options,
+        processing_mode, title, _queue_name=LIVE_QUEUE_NAME, _job_id=job_id,
+    )
+
+
 def _merge_task_source_metadata(
     existing: Dict[str, Any] | None,
     *,
@@ -400,13 +465,38 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
 
         task_service = TaskService(db)
 
-        source_type = task_service.video_service.determine_source_type(raw_source["url"])
         source_title = raw_source.get("title")
+        # A live stream (YouTube, Twitch, Kick) becomes a live task: recorded
+        # and clipped while it runs, up to the plan's duration limit.
+        live_stream = await _detect_live_stream(
+            raw_source["url"], requested=data.get("live") is True
+        )
+        if live_stream:
+            source_type = "live"
+            source_title = source_title or live_stream.title
+            await _assert_live_capacity(db)
+        else:
+            source_type = task_service.video_service.determine_source_type(raw_source["url"])
         if source_type == "youtube":
-            metadata = await _preflight_youtube_source(
-                raw_source["url"], billing["max_youtube_duration_seconds"]
-            )
-            source_title = source_title or metadata.get("title") or "YouTube Video"
+            try:
+                metadata = await _preflight_youtube_source(
+                    raw_source["url"], billing["max_youtube_duration_seconds"]
+                )
+            except HTTPException as exc:
+                # A YouTube live has no duration yet: offer it as a live task.
+                code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+                live_stream = (
+                    await _detect_live_stream(raw_source["url"], requested=True, quiet=True)
+                    if code == "VIDEO_METADATA_UNAVAILABLE"
+                    else None
+                )
+                if not live_stream:
+                    raise
+                source_type = "live"
+                source_title = source_title or live_stream.title
+                await _assert_live_capacity(db)
+            else:
+                source_title = source_title or metadata.get("title") or "YouTube Video"
 
         async with generation_allowance_guard(
             db, user_id, enabled=runtime_config.monetization_enabled
@@ -423,8 +513,22 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 caption_template=caption_template,
                 include_broll=include_broll,
                 processing_mode=processing_mode,
+                source_type=source_type if source_type == "live" else None,
             )
 
+            live_options = {
+                "output_format": output_format,
+                "add_subtitles": add_subtitles,
+                "font_family": font_family,
+                "font_size": font_size,
+                "font_color": font_color,
+                "caption_template": caption_template,
+                "cleanup_settings": cleanup_settings,
+                "webcam_region": webcam_region,
+                "hook_intro": hook_intro,
+                "clip_duration": clip_duration,
+                "max_seconds": int(billing["max_youtube_duration_seconds"]),
+            }
             try:
                 # Persist retry options before submitting the job; Redis remains a legacy cache.
                 processing_job_id = f"{task_id}:{secrets.token_hex(16)}"
@@ -440,9 +544,37 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                         clip_duration=clip_duration,
                         webcam_region=webcam_region,
                         hook_intro=hook_intro,
+                    )
+                    | (
+                        {
+                            "live": True,
+                            "live_options": live_options,
+                            "live_title": source_title or "Live",
+                            "live_processing_mode": processing_mode,
+                        }
+                        if source_type == "live"
+                        else {}
                     ),
                     db=db,
                 )
+
+                if source_type == "live":
+                    job_id = await _enqueue_live_job(
+                        task_id,
+                        raw_source["url"],
+                        user_id,
+                        processing_job_id,
+                        title=source_title or "Live",
+                        processing_mode=processing_mode,
+                        options=live_options,
+                    )
+                    logger.info(f"Live task {task_id} created and job {job_id} enqueued")
+                    return {
+                        "task_id": task_id,
+                        "job_id": job_id,
+                        "live": True,
+                        "message": "Live encontrada: os cortes vão aparecendo enquanto ela acontece",
+                    }
 
                 # Enqueue job for worker
                 queue_adapter = getattr(request.app.state, "queue_adapter", JobQueue)
@@ -1308,6 +1440,29 @@ async def cancel_task(
         raise HTTPException(status_code=500, detail=f"Erro ao cancelar a tarefa: {str(e)}")
 
 
+@router.post("/{task_id}/live/stop")
+async def stop_live(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Stop recording a live: the last moments are still cut and the clips stay."""
+    task_service = TaskService(db)
+    task = await _require_task_owner(request, task_service, db, task_id)
+    if task.get("source_type") != "live":
+        raise HTTPException(status_code=400, detail="Esta tarefa não é uma live")
+    if task.get("status") not in {"queued", "processing"}:
+        return {"message": "A live já terminou"}
+    runtime_config = get_config()
+    redis_client = redis.Redis(
+        host=runtime_config.redis_host,
+        port=runtime_config.redis_port,
+        password=runtime_config.redis_password,
+        decode_responses=True,
+    )
+    try:
+        await redis_client.setex(f"live_stop:{task_id}", 86400, "1")
+    finally:
+        await redis_client.aclose()
+    return {"message": "Parando a live. Os últimos momentos ainda viram corte."}
+
+
 @router.get("/metrics/performance")
 async def get_performance_metrics(
     request: Request, db: AsyncSession = Depends(get_db)
@@ -1385,9 +1540,26 @@ async def resume_task(
                     decode_responses=True,
                 )
                 try:
-                    await redis_client.delete(f"task_cancel:{task_id}")
+                    await redis_client.delete(f"task_cancel:{task_id}", f"live_stop:{task_id}")
                 finally:
                     await redis_client.aclose()
+
+                if source_type == "live":
+                    # Only a stream still on air can be picked up again.
+                    await _detect_live_stream(source_url, requested=True)
+                    await task_service.task_repo.update_task_status(
+                        db, task_id, "queued", progress=0, progress_message="Voltando para a live...",
+                    )
+                    processing_job_id = f"{task_id}:{secrets.token_hex(16)}"
+                    metadata["processing_job_id"] = processing_job_id
+                    await _save_task_source_metadata(task_id, metadata, db=db)
+                    job_id = await _enqueue_live_job(
+                        task_id, source_url, task["user_id"], processing_job_id,
+                        title=metadata.get("live_title") or task.get("source_title") or "Live",
+                        processing_mode=metadata.get("live_processing_mode") or "fast",
+                        options=metadata.get("live_options") or {},
+                    )
+                    return {"message": "Voltando a cortar a live", "job_id": job_id}
 
                 await task_service.task_repo.update_task_status(
                     db,

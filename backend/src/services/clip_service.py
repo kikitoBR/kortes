@@ -134,6 +134,12 @@ class ClipEditingMixin:
         clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
         if not clips:
             return
+        if source_type == "live":
+            await self._regenerate_live_clips(
+                task_id, clips, font_family, font_size, font_color, caption_template,
+                metadata, normalized_cleanup_settings,
+            )
+            return
 
         video_path: Path
         if source_type == "youtube":
@@ -575,12 +581,47 @@ class ClipEditingMixin:
             "reply": (adjustment.reply or "").strip()[:300] or "Pronto, o clipe foi refeito.",
         }
 
+    async def _regenerate_live_clips(
+        self, task_id, clips, font_family, font_size, font_color, caption_template,
+        metadata: Dict[str, Any], cleanup_settings: Dict[str, Any],
+    ) -> None:
+        """Render a live's clips again from their archived minutes, keeping each cut."""
+        from ..clip_review import segment_from_clip
+        from ..live.archive import LiveClipSource
+
+        source = LiveClipSource(task_id)
+        output_dir = Path(self.config.temp_dir) / "clips"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for clip in clips:
+            ranges = await run_in_thread(self._get_clip_source_ranges, clip)
+            segment = {**segment_from_clip(clip, ranges), "keep_ranges": ranges}
+            info = await self.video_service.create_single_clip(
+                source.timing_path, segment, max(0, int(clip.get("clip_order") or 1) - 1), output_dir,
+                font_family, font_size, font_color, caption_template,
+                metadata.get("output_format", "vertical"), metadata.get("add_subtitles", True),
+                cleanup_settings, webcam_region=metadata.get("webcam_region"),
+                hook_intro=metadata.get("hook_intro"), clip_source=source,
+            )
+            if not info:
+                raise ValueError(
+                    f"Não foi possível refazer o clipe {clip.get('clip_order')}. "
+                    "O trecho dele pode não estar mais guardado."
+                )
+            await self.clip_repo.update_clip(
+                self.db, clip["id"], info["filename"], info["path"], info["start_time"],
+                info["end_time"], info["duration"], info.get("text") or clip.get("text") or "",
+            )
+
     async def _clip_source_for_task(self, task: Dict[str, Any]) -> "ClipSource":
         """Where a finished task's clips take their picture from when re-rendered."""
         from .clip_source import ClipSource
 
         source_url = task.get("source_url")
         source_type = task.get("source_type")
+        if source_type == "live":
+            from ..live.archive import LiveClipSource
+
+            return LiveClipSource(task["id"])
         if not source_url or not source_type:
             raise ValueError("O link de origem da tarefa está ausente")
         processing_mode = task.get("processing_mode") or self.config.default_processing_mode

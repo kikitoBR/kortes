@@ -299,17 +299,18 @@ class TaskService(ClipEditingMixin):
         caption_template: str = "default",
         include_broll: bool = False,
         processing_mode: str = "fast",
+        source_type: Optional[str] = None,
     ) -> str:
         """
         Create a new task with associated source.
-        Returns the task ID.
+        Returns the task ID. ``source_type="live"`` marks a live stream.
         """
         # Validate user exists
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
 
         # Determine source type
-        source_type = self.video_service.determine_source_type(url)
+        source_type = source_type or self.video_service.determine_source_type(url)
         if url.startswith("upload://s3/"):
             await run_in_thread(MediaStorage().validate_source, url, user_id)
 
@@ -908,6 +909,10 @@ class TaskService(ClipEditingMixin):
             video_id = extract_video_id(source_url)
             if video_id:
                 await queue_delete(self.db, MediaStorage().youtube_metadata_reference(video_id))
+        if task and task.get("source_type") == "live":
+            from ..live.archive import remove_live_files
+
+            await run_in_thread(remove_live_files, task_id)
         # Delete all clips for this task
         await self.clip_repo.delete_clips_by_task(self.db, task_id)
 

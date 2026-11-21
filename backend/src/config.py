@@ -78,6 +78,18 @@ class Config:
         # Final review: one AI call per rendered clip that fixes a weak hook,
         # missing context, a dead start or an ending cut mid-reaction.
         self.clip_review_enabled = self._get_bool_env("CLIP_REVIEW_ENABLED", True)
+        # Live clipping: a live link records in short pieces kept only for a
+        # few minutes; moments become clips while the stream goes on.
+        self.live_clipping_enabled = self._get_bool_env("LIVE_CLIPPING_ENABLED", True)
+        self.live_max_concurrent = max(1, int(env_or_default("LIVE_MAX_CONCURRENT", "2")))
+        self.live_piece_seconds = max(10, int(env_or_default("LIVE_PIECE_SECONDS", "30")))
+        self.live_buffer_max_seconds = max(300, int(env_or_default("LIVE_BUFFER_MAX_SECONDS", "1200")))
+        self.live_analysis_interval_seconds = max(30, int(env_or_default("LIVE_ANALYSIS_INTERVAL_SECONDS", "120")))
+        self.live_min_score = max(1, min(10, int(env_or_default("LIVE_MIN_SCORE", "6"))))
+        self.live_max_clips = max(1, int(env_or_default("LIVE_MAX_CLIPS", "30")))
+        self.live_max_height = max(0, int(env_or_default("LIVE_MAX_HEIGHT", "1080")))
+        # Each clip keeps its own minutes of video for later edits this long.
+        self.live_archive_days = max(1, int(env_or_default("LIVE_ARCHIVE_DAYS", "7")))
         # Clips keep the source frame rate up to this cap (30 restores the old
         # fixed 30 fps output; higher rates roughly double render time).
         self.max_output_fps = max(1, int(env_or_default("MAX_OUTPUT_FPS", "60")))

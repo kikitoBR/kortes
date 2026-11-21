@@ -215,7 +215,14 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
             caption_path = await run_in_thread(storage.local_path, clip["file_path"], metadata_only=True)
             caption_settings = load_clip_caption_settings(caption_path) or {}
             await db.close()
-            if not source or not source.exists():
+            if source_type == "live":
+                # A live keeps only the minutes around each clip.
+                from ..live.archive import LiveClipSource
+
+                clip_source = LiveClipSource(task_id)
+                render_source = await clip_source.render_source(*source_range_bounds(ranges))
+                source = clip_source.timing_path
+            elif not source or not source.exists():
                 if source_type == "youtube" and get_config().youtube_partial_download:
                     # Only this clip's minutes, not the whole (maybe hours-long) video.
                     clip_source = await ClipSource.for_task(

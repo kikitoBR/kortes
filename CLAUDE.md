@@ -18,7 +18,7 @@ docker-compose logs -f worker     # Debug video processing
 docker-compose down               # Stop all services
 ```
 
-Services: Frontend (:3107), Backend API (:8000, docs at /docs), Worker (ARQ), PostgreSQL (:5432), Redis (:6379)
+Services: Frontend (:3107), Backend API (:8000, docs at /docs), Worker (ARQ), Live worker (ARQ, queue `supoclip_live`), PostgreSQL (:5432), Redis (:6379)
 
 ### Backend (local)
 
@@ -95,6 +95,26 @@ utils/               → Thread pool helpers for blocking operations (async_help
 5. **Review** → `CLIP_REVIEW_ENABLED` (default on): one AI call per rendered clip (`ai.review_clip`, rules in `clip_review.py`, from SHARINGAN) reads the transcript before/inside/after with peaks; weak hook → new teaser, missing context → start up to 15 s earlier, dead start → up to 8 s later, cut ending → up to 8 s later, weak title → new `hook_title`. Fixes re-render the clip once before it is saved; any failure keeps the first render. Audio is levelled to -14 LUFS in two passes (`loudnorm_filter_for`)
 6. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL. Each clip is saved and pushed to the page (SSE `clip_ready`) as soon as it renders; a failed clip is skipped and counted in the progress line. A rerun of the same task (worker restart, "Retomar") keeps clips already rendered for the same moments (`reusable_clip_ids` in `task_service.py`)
 
+### Live clipping (`src/live/`, `workers/live.py`)
+
+A live link (Twitch/Kick channel, or a YouTube video with no duration yet) creates a task with source type
+`live` (`_detect_live_stream` in `routes/tasks.py`, probing with yt-dlp; at most `LIVE_MAX_CONCURRENT` at once)
+and enqueues `watch_live` on the `supoclip_live` queue, served by the `live-worker` compose service (same image).
+`LiveSession` (`live/session.py`, adapted from SHARINGAN's live agent):
+- **Record:** ffmpeg copies the stream (no re-encode) into `LIVE_PIECE_SECONDS` pieces under
+  `TEMP_DIR/live/<task>/pieces`. Pieces are deleted once the AI has read past them (rolling buffer, hard cap
+  `LIVE_BUFFER_MAX_SECONDS`); each piece's mono AAC is kept in `audio/` (~20 MB/h).
+- **Listen:** each piece is transcribed (AssemblyAI/Whisper, 3 at a time) and its voice energy measured, all on one
+  live clock written to `live.transcript_cache.json` next to the never-existing timing path `live.mp4`.
+- **Look:** every `LIVE_ANALYSIS_INTERVAL_SECONDS` of new speech, or 45 s after a strong 🔊🔊 peak, `ai.find_live_moments`
+  reads the last 5 min; `filter_moments` keeps finished, non-overlapping moments scoring `LIVE_MIN_SCORE`+.
+- **Cut:** each moment's minutes (−20 s/+10 s) are joined into `archive/clip-NNN.mkv` (`archive.json` maps them to the
+  live clock) and rendered by `create_single_clip` with `LiveClipSource` (+ review), then saved to the task as it is
+  ready (SSE `clip_ready`). Editor, caption edits, "Ajustar com IA" and "apply to all" use the archive, kept
+  `LIVE_ARCHIVE_DAYS` (cron `purge_live_archives`). Edits wait until the live ends (the task is "processing").
+- **Control:** `POST /tasks/{id}/live/stop` (Redis `live_stop:`) ends recording and still cuts the last moments;
+  recording also stops at the plan's YouTube duration limit. A restarted worker resumes (arq retries, state.json).
+
 ### Frontend Architecture
 
 - **Next.js 15** with App Router, React 19, TailwindCSS v4
@@ -147,7 +167,8 @@ PostgreSQL 15. Schema in `init.sql`. Mixed naming conventions:
 - `GET /tasks/{id}` — Get task with clips
 - `GET /tasks/{id}/progress` — SSE real-time progress stream
 - `POST /tasks/{id}/cancel` — Cancel processing
-- `POST /tasks/{id}/resume` — Resume cancelled/errored task
+- `POST /tasks/{id}/resume` — Resume cancelled/errored task (a live resumes only if still on air)
+- `POST /tasks/{id}/live/stop` — Stop recording a live task (the last moments still become clips)
 - `DELETE /tasks/{id}` — Delete task
 
 **Clip editing:**
@@ -224,6 +245,15 @@ YOUTUBE_DOWNLOAD_PROVIDER=yt_dlp     # yt_dlp | apify
 YOUTUBE_PARTIAL_DOWNLOAD=true        # Long videos: audio first, then each clip's section only
 YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS=1200
 CLIP_REVIEW_ENABLED=true             # One AI review (and possible re-render) per clip
+LIVE_CLIPPING_ENABLED=true           # Live links are recorded and clipped while they stream
+LIVE_MAX_CONCURRENT=2                # Lives recorded at once (live-worker max_jobs)
+LIVE_PIECE_SECONDS=30                # Recording piece length
+LIVE_BUFFER_MAX_SECONDS=1200         # Hard cap on buffered live video
+LIVE_ANALYSIS_INTERVAL_SECONDS=120   # New speech between AI looks
+LIVE_MIN_SCORE=6                     # Minimum AI score (1-10) for a live moment to become a clip
+LIVE_MAX_CLIPS=30
+LIVE_MAX_HEIGHT=1080                 # Recording quality cap (720 halves disk and bandwidth)
+LIVE_ARCHIVE_DAYS=7                  # How long each live clip's minutes stay for edits
 
 # Optional
 PEXELS_API_KEY=...                   # B-roll stock footage

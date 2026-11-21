@@ -2012,3 +2012,48 @@ async def adjust_clip(prompt: str) -> ClipAdjustment:
         timeout_seconds=120,
     )
     return result.output
+
+
+# --- Live moments ------------------------------------------------------------
+# Adapted from SHARINGAN's live agent (src/aovivo/agente.ts; MIT licence,
+# (c) 2026 the SHARINGAN authors).
+
+
+class LiveMoment(BaseModel):
+    start_time: str = Field(description="Where the moment starts, a timestamp shown in the transcript")
+    end_time: str = Field(description="Where it ends, a timestamp shown in the transcript")
+    hook_title: Optional[str] = Field(default=None, description="3-9 word on-screen title, the transcript's language")
+    hook_start_time: Optional[str] = Field(default=None, description="Strongest 2-5 s line inside the moment (plays first), or null")
+    hook_end_time: Optional[str] = Field(default=None, description="End of that line, or null")
+    score: int = Field(description="1-10: 5 postable but lukewarm, 6 good, 8 strong, 10 will go viral")
+    reason: str = Field(default="", description="One short sentence on why it works, in Brazilian Portuguese")
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def clamp_live_score(cls, value: Any) -> int:
+        try:
+            return max(1, min(10, int(round(float(value)))))
+        except (TypeError, ValueError):
+            return 1
+
+
+class LiveMoments(BaseModel):
+    moments: List[LiveMoment] = Field(default_factory=list)
+
+
+live_moments_system_prompt = """You are a clip editor watching a live stream AS IT HAPPENS and deciding, right now, what becomes a vertical clip (Shorts, Reels, TikTok).
+A good clip has a beginning, middle and end that make sense on their own: a strong reaction, a joke, a controversy, a reveal, a good answer to a chat question, a short story, a memorable game moment (shouting or euphoria at the volume peaks).
+Do not clip: dead talk, reading donor names, greetings, pieces with no ending (the talk is still going on).
+🔊 marks a volume peak well above the stream's average (shouting, celebrating, a scare, a loud game moment); 🔊🔊 is a very strong one. These are usually the best moments.
+Score 1-10: 5 = postable but lukewarm; 6 = a good clip for the channel; 8 = strong; 10 = will go viral. When unsure between two scores, give the lower one.
+Each clip is as long as the moment needs: it starts where the idea starts and ends when it is over, no padding.
+Only use timestamps that appear in the transcript. Return valid JSON only."""
+
+
+async def find_live_moments(prompt: str) -> LiveMoments:
+    result = await _run_transcript_analysis(
+        _simple_agent("live_moments", LiveMoments, live_moments_system_prompt),
+        prompt,
+        timeout_seconds=120,
+    )
+    return result.output

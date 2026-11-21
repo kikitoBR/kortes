@@ -117,6 +117,17 @@ class TaskRepository:
         return metadata if isinstance(metadata, dict) else {}
 
     @staticmethod
+    async def count_active_live_tasks(db: AsyncSession) -> int:
+        """Live streams being recorded (or about to be) right now."""
+        result = await db.execute(
+            text(
+                "SELECT COUNT(*) FROM tasks t JOIN sources s ON s.id = t.source_id "
+                "WHERE s.type = 'live' AND t.status IN ('queued', 'processing')"
+            )
+        )
+        return int(result.scalar() or 0)
+
+    @staticmethod
     async def get_task_by_id(
         db: AsyncSession, task_id: str
     ) -> Optional[Dict[str, Any]]:

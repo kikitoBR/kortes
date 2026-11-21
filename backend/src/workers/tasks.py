@@ -136,6 +136,14 @@ async def process_video_task(
             raise
 
 
+async def purge_live_archives(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Cron: drop finished lives' clip minutes after LIVE_ARCHIVE_DAYS."""
+    from ..live.archive import purge_expired_live_archives
+    from ..utils.async_helpers import run_in_thread
+
+    return {"removed": await run_in_thread(purge_expired_live_archives)}
+
+
 async def _social_service(db):
     from ..runtime_settings import load_runtime_settings_cache
     from ..services.social_service import SocialService
@@ -241,6 +249,7 @@ class WorkerSettings:
         cron(sweep_orphaned_media, hour={0, 6, 12, 18}, minute=15),
         # Daily: drop uploaded sources past SOURCE_VIDEO_RETENTION_DAYS (off by default).
         cron(purge_expired_source_videos, hour=3, minute=30, timeout=1800),
+        cron(purge_live_archives, hour=4, minute=10, timeout=1800),
         # Every minute: promote due scheduled posts and poll async publishes.
         cron(dispatch_scheduled_social_posts, second=0, timeout=300),
         # Hourly: pull audience metrics back for the performance loop.

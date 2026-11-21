@@ -164,6 +164,15 @@ services:
       - SPEAKER_FRAMING=${SPEAKER_FRAMING:-true}
       - HOOK_FIRST_TEASER=${HOOK_FIRST_TEASER:-true}
       - CLIP_REVIEW_ENABLED=${CLIP_REVIEW_ENABLED:-true}
+      - LIVE_CLIPPING_ENABLED=${LIVE_CLIPPING_ENABLED:-true}
+      - LIVE_MAX_CONCURRENT=${LIVE_MAX_CONCURRENT:-2}
+      - LIVE_PIECE_SECONDS=${LIVE_PIECE_SECONDS:-30}
+      - LIVE_BUFFER_MAX_SECONDS=${LIVE_BUFFER_MAX_SECONDS:-1200}
+      - LIVE_ANALYSIS_INTERVAL_SECONDS=${LIVE_ANALYSIS_INTERVAL_SECONDS:-120}
+      - LIVE_MIN_SCORE=${LIVE_MIN_SCORE:-6}
+      - LIVE_MAX_CLIPS=${LIVE_MAX_CLIPS:-30}
+      - LIVE_MAX_HEIGHT=${LIVE_MAX_HEIGHT:-1080}
+      - LIVE_ARCHIVE_DAYS=${LIVE_ARCHIVE_DAYS:-7}
       - FAST_MODE_TRANSCRIPT_MODEL=${FAST_MODE_TRANSCRIPT_MODEL:-universal-2}
       - SELF_HOST=${SELF_HOST:-true}
       - BACKEND_AUTH_SECRET=${BACKEND_AUTH_SECRET}
@@ -239,7 +248,7 @@ services:
       start_period: 20s
 
   # Worker process for background video processing
-  worker:
+  worker: &worker-service
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -329,6 +338,15 @@ services:
       - SPEAKER_FRAMING=${SPEAKER_FRAMING:-true}
       - HOOK_FIRST_TEASER=${HOOK_FIRST_TEASER:-true}
       - CLIP_REVIEW_ENABLED=${CLIP_REVIEW_ENABLED:-true}
+      - LIVE_CLIPPING_ENABLED=${LIVE_CLIPPING_ENABLED:-true}
+      - LIVE_MAX_CONCURRENT=${LIVE_MAX_CONCURRENT:-2}
+      - LIVE_PIECE_SECONDS=${LIVE_PIECE_SECONDS:-30}
+      - LIVE_BUFFER_MAX_SECONDS=${LIVE_BUFFER_MAX_SECONDS:-1200}
+      - LIVE_ANALYSIS_INTERVAL_SECONDS=${LIVE_ANALYSIS_INTERVAL_SECONDS:-120}
+      - LIVE_MIN_SCORE=${LIVE_MIN_SCORE:-6}
+      - LIVE_MAX_CLIPS=${LIVE_MAX_CLIPS:-30}
+      - LIVE_MAX_HEIGHT=${LIVE_MAX_HEIGHT:-1080}
+      - LIVE_ARCHIVE_DAYS=${LIVE_ARCHIVE_DAYS:-7}
       - FAST_MODE_TRANSCRIPT_MODEL=${FAST_MODE_TRANSCRIPT_MODEL:-universal-2}
       - SELF_HOST=${SELF_HOST:-true}
       - BACKEND_AUTH_SECRET=${BACKEND_AUTH_SECRET}
@@ -370,6 +388,19 @@ services:
 
     healthcheck:
       test: ["CMD", ".venv/bin/arq", "--check", "src.workers.tasks.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Live streams: one long job per live on its own queue, so a stream of
+  # hours never takes a render slot. Same image and settings as the worker.
+  live-worker:
+    <<: *worker-service
+    container_name: supoclip-live-worker
+    command: [".venv/bin/arq", "src.workers.live.LiveWorkerSettings"]
+    healthcheck:
+      test: ["CMD", ".venv/bin/arq", "--check", "src.workers.live.LiveWorkerSettings"]
       interval: 30s
       timeout: 10s
       retries: 3

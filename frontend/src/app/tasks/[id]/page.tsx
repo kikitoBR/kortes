@@ -665,7 +665,7 @@ export default function TaskPage() {
             )}
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
               <StatusBadge status={task.status} />
-              <span className="flex items-center gap-1.5 capitalize">{task.source_type === "youtube" ? <Youtube className="size-3.5" /> : <Upload className="size-3.5" />}{task.source_type === "youtube" ? "YouTube" : "Envio direto"}</span>
+              <span className="flex items-center gap-1.5 capitalize">{task.source_type === "upload" || task.source_type === "video_url" ? <Upload className="size-3.5" /> : <Youtube className="size-3.5" />}{task.source_type === "youtube" ? "YouTube" : task.source_type === "live" ? "Live" : "Envio direto"}</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="flex cursor-default items-center gap-1.5"><Clock className="size-3.5" />{timeAgo(task.created_at)}</span>
@@ -681,7 +681,17 @@ export default function TaskPage() {
 
           {!readOnly && (
           <div className="flex flex-wrap items-center gap-2">
-            {isActive && (
+            {isActive && task.source_type === "live" && (
+              <Button size="sm" variant="outline" disabled={pendingAction !== null}
+                onClick={() => void runAction("stop-live", async () => {
+                  await requestAction(`${taskApiUrl}/${task.id}/live/stop`, "POST");
+                  await fetchTaskStatus();
+                  toast.success("Parando a live. Os últimos momentos ainda viram corte.");
+                })}>
+                Parar a live
+              </Button>
+            )}
+            {isActive && task.source_type !== "live" && (
               <Button size="sm" variant="outline" disabled={pendingAction !== null}
                 onClick={() => void runAction("cancel", async () => {
                   await requestAction(`${taskApiUrl}/${task.id}/cancel`, "POST");
@@ -752,7 +762,7 @@ export default function TaskPage() {
 
         {isActive && task ? (
           <div className="space-y-8">
-            <ProcessingPanel status={task.status} progress={progress} message={progressMessage} readyCount={clips.length} />
+            <ProcessingPanel status={task.status} progress={progress} message={progressMessage} readyCount={clips.length} live={task.source_type === "live"} />
             {clips.length > 0 && (
               <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 {sortedClips.map(renderTile)}

@@ -408,7 +408,7 @@ export default function HomeApp() {
                       type="url"
                       autoFocus
                       autoComplete="off"
-                      placeholder="Cole um link do YouTube ou envie um arquivo de vídeo"
+                      placeholder="Cole um link do YouTube, uma live (YouTube, Twitch, Kick) ou envie um vídeo"
                       aria-describedby={limitNote ? "youtube-duration-limit" : undefined}
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}

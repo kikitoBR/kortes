@@ -230,7 +230,30 @@ function stepFromMessage(message: string) {
   return null;
 }
 
-export function ProcessingPanel({ status, progress, message, readyCount }: { status: string; progress: number; message: string; readyCount: number }) {
+/** A live being recorded: no steps, clips arrive while the stream goes on. */
+function LivePanel({ message, readyCount, status }: { message: string; readyCount: number; status: string }) {
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-background p-5 sm:p-6" aria-live="polite">
+      <div className="flex items-start gap-3">
+        <span className="mt-1 inline-flex shrink-0 items-center gap-1.5 rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
+          <span className="size-1.5 rounded-full bg-white motion-safe:animate-pulse" />
+          Ao vivo
+        </span>
+        <div className="min-w-0">
+          <p className="text-lg font-semibold">{message || (status === "queued" ? "Conectando na live..." : "Assistindo a live")}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {readyCount > 0
+              ? "Os cortes aparecem aqui enquanto a live acontece. Pare quando quiser: os últimos momentos ainda viram corte."
+              : "A IA está ouvindo a live. Cada momento forte vira corte em poucos minutos."}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function ProcessingPanel({ status, progress, message, readyCount, live = false }: { status: string; progress: number; message: string; readyCount: number; live?: boolean }) {
+  if (live) return <LivePanel message={message} readyCount={readyCount} status={status} />;
   const byProgress = STEPS.findIndex((step) => progress < step.until);
   const activeStep = status === "queued" ? -1 : stepFromMessage(message) ?? (byProgress === -1 ? STEPS.length - 1 : byProgress);
   return (

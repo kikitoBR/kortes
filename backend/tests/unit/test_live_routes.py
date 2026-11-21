@@ -84,3 +84,39 @@ async def test_too_many_lives_at_once_are_refused(monkeypatch, creation):
         await tasks.create_task(creation.request, db=None)
     assert error.value.status_code == 429
     creation.service.create_task_with_source.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_returns_the_current_frame(monkeypatch):
+    from src.live import capture
+
+    monkeypatch.setattr(tasks, "_get_user_id_from_headers", AsyncMock(return_value="user-1"))
+    monkeypatch.setattr(capture, "grab_live_frame", lambda url: b"\xff\xd8jpeg")
+    db = SimpleNamespace(close=AsyncMock())
+    response = await tasks.live_snapshot("https://www.twitch.tv/streamer", SimpleNamespace(), db=db)
+    assert response.body == b"\xff\xd8jpeg" and response.media_type == "image/jpeg"
+
+    def offline(url):
+        raise capture.LiveNotOnAir(url)
+
+    monkeypatch.setattr(capture, "grab_live_frame", offline)
+    with pytest.raises(HTTPException) as error:
+        await tasks.live_snapshot("https://kick.com/someone", SimpleNamespace(), db=db)
+    assert error.value.status_code == 422
+    with pytest.raises(HTTPException) as error:
+        await tasks.live_snapshot("https://example.com/video.mp4", SimpleNamespace(), db=db)
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_live_task_carries_its_player_and_chat(monkeypatch, creation):
+    probe(monkeypatch, LiveStream("Canal", True, [{"url": "x"}], video_id=None))
+    await tasks.create_task(creation.request, db=None)
+    metadata = creation.saved.await_args.args[1]
+    assert metadata["live_embed"] == {"platform": "twitch", "channel": "streamer"}
+
+    creation.request.json.return_value = {"source": {"url": "https://www.youtube.com/@canal/live"}}
+    probe(monkeypatch, LiveStream("Canal", True, [{"url": "x"}], video_id="abcdefghijk"))
+    await tasks.create_task(creation.request, db=None)
+    metadata = creation.saved.await_args.args[1]
+    assert metadata["live_embed"] == {"platform": "youtube", "video_id": "abcdefghijk"}

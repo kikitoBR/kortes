@@ -17,6 +17,7 @@ from ..editor_document import (
 )
 from ..utils.async_helpers import run_in_thread
 from ..media_storage import MediaStorage, STORAGE_ERRORS, media_work
+from ..media.common import WEBCAM_OUTPUT_FORMATS
 
 
 # One download per YouTube video at a time. Every download of a video writes
@@ -138,7 +139,7 @@ def make_assets(directory: Path):
     }
 
 
-def gameplay_framing(clip_path: Path, webcam_region=None):
+def gameplay_framing(clip_path: Path, webcam_region=None, output_format: str = "vertical_gameplay"):
     """Editor framing that matches the generated gameplay clip, or None.
 
     Uses the same planner as the clip render (picked box, else detection), then
@@ -154,8 +155,15 @@ def gameplay_framing(clip_path: Path, webcam_region=None):
     width, height = ffprobe_video_size(clip_path)
     cam, game = regions["cam"], regions["game"]
     x, y = max(0.0, cam["x"] / width), max(0.0, cam["y"] / height)
+    floating = output_format == "vertical_cam_float"
+    if floating:
+        # The floating layout cuts the game at 9:16 around the same centre.
+        cut_w = min(width, game["h"] * 9 / 16)
+        centre = game["x"] + game["w"] / 2
+        game = {**game, "w": cut_w, "x": max(0.0, min(width - cut_w, centre - cut_w / 2))}
     return {
-        "layout": "gameplay",
+        "layout": "float" if floating else "gameplay",
+        "camPosition": "bottom" if output_format == "vertical_gameplay_bottom" else "top",
         "webcam": {
             "x": round(x, 4),
             "y": round(y, 4),
@@ -261,10 +269,11 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
                 raise ValueError("Não foi possível preparar o vídeo original")
             metadata = await run_in_thread(make_assets, directory)
             gameplay = None
-            if source_settings.get("output_format") == "vertical_gameplay":
+            output_format = source_settings.get("output_format")
+            if output_format in WEBCAM_OUTPUT_FORMATS:
                 try:
                     gameplay = await run_in_thread(
-                        gameplay_framing, clean, source_settings.get("webcam_region")
+                        gameplay_framing, clean, source_settings.get("webcam_region"), output_format
                     )
                 except Exception:
                     logging.getLogger(__name__).warning(
@@ -286,6 +295,11 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
                             "aspect": "original"
                             if source_settings.get("output_format") == "original"
                             else "vertical",
+                            **(
+                                {"fit": "contain", "background": "blur"}
+                                if output_format == "vertical_blur"
+                                else {}
+                            ),
                             **(gameplay or {}),
                         },
                         "captions": {

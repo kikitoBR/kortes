@@ -141,10 +141,22 @@ export function Inspector({
     [pickerOpen, setPickerOpen] = useState(false);
   const landscape = asset.width / Math.max(1, asset.height) > 1.2,
     gameplay = isGameplay(doc.framing);
-  const enterGameplay = () => {
+  const layoutValue = !gameplay
+    ? "single"
+    : doc.framing.layout === "float"
+      ? "float"
+      : doc.framing.camPosition === "bottom"
+        ? "game_top"
+        : "cam_top";
+  const enterGameplay = (variant: "cam_top" | "game_top" | "float" = "cam_top") => {
+    const layout = variant === "float" ? "float" : "gameplay";
+    const camPosition: "top" | "bottom" = variant === "game_top" ? "bottom" : "top";
     const known = doc.framing.webcam ?? asset.gameplay?.webcam;
     if (known) {
-      const game = asset.gameplay ?? { x: 0.5, y: 0.5, zoom: 1 };
+      // The clip's own game cut fits when the layout family matches; the
+      // floating layout cuts the game narrower, so others start centred.
+      const sameFamily = (asset.gameplay?.layout ?? "gameplay") === layout;
+      const game = asset.gameplay && sameFamily ? asset.gameplay : { x: 0.5, y: 0.5, zoom: asset.gameplay?.zoom ?? 1 };
       update((d) => ({
         ...d,
         framing: {
@@ -152,7 +164,8 @@ export function Inspector({
           x: game.x,
           y: game.y,
           zoom: game.zoom,
-          layout: "gameplay",
+          layout,
+          camPosition,
           webcam: d.framing.webcam ?? known,
         },
       }));
@@ -169,7 +182,8 @@ export function Inspector({
         x: 0.5,
         y: 0.5,
         zoom: 1,
-        layout: "gameplay",
+        layout,
+        camPosition,
         webcam: { x: 0.02, y: Math.max(0, 0.98 - h), w, h },
       },
     }));
@@ -642,9 +656,13 @@ export function Inspector({
                 <Section
                   title="Layout"
                   description={
-                    gameplay
+                    layoutValue === "cam_top"
                       ? "A webcam vai em cima e o jogo embaixo, como nos cortes de live."
-                      : "Use webcam + jogo em vídeos de live com a câmera num canto da tela."
+                      : layoutValue === "game_top"
+                        ? "O jogo vai em cima e a reação embaixo: bom quando a jogada é o principal."
+                        : layoutValue === "float"
+                          ? "O jogo ocupa a tela toda e a webcam flutua no canto, com borda."
+                          : "Para vídeos de live com a câmera num canto da tela, escolha um layout com webcam."
                   }
                 >
                   <ToggleGroup
@@ -652,9 +670,9 @@ export function Inspector({
                     variant="outline"
                     aria-label="Layout"
                     className="w-full"
-                    value={gameplay ? "gameplay" : "single"}
+                    value={layoutValue}
                     onValueChange={(layout) => {
-                      if (layout === "gameplay") enterGameplay();
+                      if (layout === "cam_top" || layout === "game_top" || layout === "float") enterGameplay(layout);
                       else if (layout === "single")
                         update((d) => ({
                           ...d,
@@ -668,12 +686,18 @@ export function Inspector({
                         }));
                     }}
                   >
-                    <ToggleGroupItem value="single" className="flex-1 text-xs">
-                      Tela cheia
-                    </ToggleGroupItem>
-                    <ToggleGroupItem value="gameplay" className="flex-1 text-xs">
-                      Webcam + jogo
-                    </ToggleGroupItem>
+                    {(
+                      [
+                        ["single", "Tela cheia"],
+                        ["cam_top", "Webcam em cima"],
+                        ["game_top", "Jogo em cima"],
+                        ["float", "Webcam flutuando"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <ToggleGroupItem key={value} value={value} className="h-auto flex-1 whitespace-normal py-1.5 text-[11px] leading-tight">
+                        {label}
+                      </ToggleGroupItem>
+                    ))}
                   </ToggleGroup>
                 </Section>
                 <Separator />
@@ -682,7 +706,7 @@ export function Inspector({
             {gameplay && doc.framing.webcam ? (
               <Section
                 title="Webcam"
-                description="Arraste a parte de cima da pré-visualização para mover a webcam."
+                description="Arraste a webcam na pré-visualização para movê-la."
               >
                 <Button
                   size="sm"
@@ -802,6 +826,31 @@ export function Inspector({
                   </ToggleGroupItem>
                 </ToggleGroup>
               </Field>
+              {doc.framing.fit === "contain" && doc.framing.aspect !== "original" && (
+                <Field label="Fundo">
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    aria-label="Fundo"
+                    className="w-full"
+                    value={doc.framing.background ?? "black"}
+                    onValueChange={(background) =>
+                      background &&
+                      update((d) => ({
+                        ...d,
+                        framing: { ...d.framing, background: background as "black" | "blur" },
+                      }))
+                    }
+                  >
+                    <ToggleGroupItem value="black" className="flex-1 text-xs">
+                      Preto
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="blur" className="flex-1 text-xs">
+                      Borrado
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </Field>
+              )}
             </Section>
             )}
             <Separator />

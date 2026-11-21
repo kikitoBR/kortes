@@ -33,6 +33,7 @@ import { fetchGenerations, greeting, type GenerationSummary } from "@/lib/genera
 import { cn } from "@/lib/utils";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 import { WebcamRegionPicker, type WebcamRegion } from "@/components/webcam-region-picker";
+import { isLiveLink } from "@/lib/live-links";
 
 interface CaptionTemplate {
   id: string;
@@ -44,15 +45,29 @@ interface CaptionTemplate {
   font_color?: string;
 }
 
-type OutputFormat = "vertical" | "vertical_pan" | "vertical_split" | "vertical_gameplay" | "original";
+type OutputFormat =
+  | "vertical"
+  | "vertical_pan"
+  | "vertical_split"
+  | "vertical_gameplay"
+  | "vertical_gameplay_bottom"
+  | "vertical_cam_float"
+  | "vertical_blur"
+  | "original";
 
 const FRAMINGS: { id: OutputFormat; label: string; hint: string }[] = [
   { id: "vertical", label: "Auto 9:16", hint: "Corte vertical com rastreamento facial" },
   { id: "vertical_pan", label: "Seguir orador", hint: "Acompanha quem estiver falando" },
   { id: "vertical_split", label: "Tela dividida", hint: "Dois oradores empilhados" },
-  { id: "vertical_gameplay", label: "Gameplay", hint: "Webcam em cima, jogo embaixo" },
+  { id: "vertical_gameplay", label: "Webcam em cima", hint: "Webcam em cima, jogo embaixo" },
+  { id: "vertical_gameplay_bottom", label: "Jogo em cima", hint: "Jogo em cima, webcam embaixo" },
+  { id: "vertical_cam_float", label: "Webcam flutuando", hint: "Jogo na tela toda, webcam no canto" },
+  { id: "vertical_blur", label: "Fundo borrado", hint: "Vídeo inteiro no meio, fundo borrado" },
   { id: "original", label: "Original", hint: "Manter proporção original do vídeo" },
 ];
+
+/** Layouts built around the streamer's webcam (it can be marked by hand). */
+const WEBCAM_LAYOUTS: OutputFormat[] = ["vertical_gameplay", "vertical_gameplay_bottom", "vertical_cam_float"];
 
 type ClipDuration = "auto" | "short" | "medium" | "long";
 
@@ -122,6 +137,46 @@ export default function HomeApp() {
   useEffect(() => {
     setWebcamRegion(null);
   }, [youtubeFramesKey, file]);
+
+  // Lives have no stills: the webcam is marked on a print of the stream itself.
+  const liveLink = sourceType === "youtube" && isLiveLink(url);
+  const [useLiveFrame, setUseLiveFrame] = useState(false);
+  const snapshotMode = sourceType === "youtube" && (liveLink || useLiveFrame);
+  const [liveFrame, setLiveFrame] = useState<string | null>(null);
+  const [liveFrameState, setLiveFrameState] = useState<"idle" | "loading" | "error">("idle");
+  const [liveFrameError, setLiveFrameError] = useState<string | null>(null);
+  useEffect(() => {
+    setUseLiveFrame(false);
+    setLiveFrameState("idle");
+    setLiveFrameError(null);
+    setLiveFrame((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+  }, [url]);
+  const takeLiveSnapshot = useCallback(async () => {
+    setLiveFrameState("loading");
+    setLiveFrameError(null);
+    try {
+      const response = await fetch(`/api/tasks/live/snapshot?url=${encodeURIComponent(url.trim())}`, { cache: "no-store" });
+      if (!response.ok) {
+        const info = await parseApiError(response, "Não consegui tirar o print da live agora.");
+        throw new Error(info.message);
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      setLiveFrame((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return objectUrl;
+      });
+      setLiveFrameState("idle");
+    } catch (err) {
+      setLiveFrameError(err instanceof Error ? err.message : "Não consegui tirar o print da live agora.");
+      setLiveFrameState("error");
+    }
+  }, [url]);
+  useEffect(() => {
+    if (webcamDialogOpen && snapshotMode && !liveFrame && liveFrameState === "idle") void takeLiveSnapshot();
+  }, [webcamDialogOpen, snapshotMode, liveFrame, liveFrameState, takeLiveSnapshot]);
 
   const refreshFonts = useCallback(async () => {
     try {
@@ -272,7 +327,7 @@ export default function HomeApp() {
           remove_filler_words: removeFillerWords,
           filtered_words: normalizedFilteredWords,
           clip_duration: clipDuration,
-          webcam_region: outputFormat === "vertical_gameplay" ? webcamRegion : null,
+          webcam_region: WEBCAM_LAYOUTS.includes(outputFormat) ? webcamRegion : null,
           hook_intro: hookIntro,
         }),
       });
@@ -557,7 +612,7 @@ export default function HomeApp() {
                       </button>
                     ))}
                   </div>
-                  {outputFormat === "vertical_gameplay" ? (
+                  {WEBCAM_LAYOUTS.includes(outputFormat) ? (
                     <div className="mt-3 flex items-center justify-between gap-3 border-t px-1 pt-3">
                       <div className="min-w-0">
                         <p className="text-sm font-medium">Posição da webcam</p>
@@ -588,12 +643,47 @@ export default function HomeApp() {
                       A área marcada vai para a parte de cima do clipe e o jogo fica embaixo.
                     </DialogDescription>
                   </DialogHeader>
-                  <WebcamRegionPicker
-                    frames={sourceType === "youtube" ? youtubeFrames : undefined}
-                    videoFile={sourceType === "upload" ? file : null}
-                    value={webcamRegion}
-                    onChange={setWebcamRegion}
-                  />
+                  {snapshotMode && !liveFrame ? (
+                    <div className="grid aspect-video w-full place-items-center rounded-lg bg-muted p-6 text-center text-sm text-muted-foreground">
+                      {liveFrameState === "error" ? (
+                        <div className="space-y-3">
+                          <p>{liveFrameError}</p>
+                          <Button type="button" variant="outline" size="sm" onClick={() => void takeLiveSnapshot()}>
+                            Tentar de novo
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-2">
+                          <Loader2 className="size-4 animate-spin" />
+                          Tirando um print da live agora…
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <WebcamRegionPicker
+                      frames={sourceType === "youtube" ? (snapshotMode && liveFrame ? [liveFrame] : youtubeFrames) : undefined}
+                      videoFile={sourceType === "upload" ? file : null}
+                      value={webcamRegion}
+                      onChange={setWebcamRegion}
+                    />
+                  )}
+                  {sourceType === "youtube" && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      {snapshotMode ? (
+                        <>
+                          <span>Print tirado da live agora. A webcam não aparece?</span>
+                          <Button type="button" variant="outline" size="sm" disabled={liveFrameState === "loading"} onClick={() => void takeLiveSnapshot()}>
+                            {liveFrameState === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                            Novo print
+                          </Button>
+                        </>
+                      ) : (
+                        <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => setUseLiveFrame(true)}>
+                          É uma live? Usar um print da transmissão
+                        </Button>
+                      )}
+                    </div>
+                  )}
                   <DialogFooter>
                     <Button
                       type="button"
@@ -818,6 +908,12 @@ function FramingGlyph({ kind }: { kind: OutputFormat }) {
         <span className="h-6 w-10 rounded-[3px] border-2 border-foreground/70" />
       ) : kind === "vertical_gameplay" ? (
         <span className="flex h-9 w-5 flex-col gap-0.5 rounded-[3px] border-2 border-foreground/70 p-0.5"><span className="flex basis-2/5 items-center justify-center rounded-[1px] bg-foreground/30"><span className="size-1.5 rounded-full bg-brand" /></span><span className="flex-1 rounded-[1px] bg-foreground/50" /></span>
+      ) : kind === "vertical_gameplay_bottom" ? (
+        <span className="flex h-9 w-5 flex-col gap-0.5 rounded-[3px] border-2 border-foreground/70 p-0.5"><span className="flex-1 rounded-[1px] bg-foreground/50" /><span className="flex basis-2/5 items-center justify-center rounded-[1px] bg-foreground/30"><span className="size-1.5 rounded-full bg-brand" /></span></span>
+      ) : kind === "vertical_cam_float" ? (
+        <span className="relative flex h-9 w-5 rounded-[3px] border-2 border-foreground/70 bg-foreground/50 p-0.5"><span className="absolute left-0.5 top-1.5 flex h-2 w-2.5 items-center justify-center rounded-[1px] border border-background bg-foreground/30"><span className="size-1 rounded-full bg-brand" /></span></span>
+      ) : kind === "vertical_blur" ? (
+        <span className="flex h-9 w-5 items-center rounded-[3px] border-2 border-foreground/70 bg-foreground/15 blur-0"><span className="h-3 w-full bg-foreground/60" /></span>
       ) : kind === "vertical_split" ? (
         <span className="flex h-9 w-5 flex-col gap-0.5 rounded-[3px] border-2 border-foreground/70 p-0.5"><span className="flex-1 rounded-[1px] bg-foreground/30" /><span className="flex-1 rounded-[1px] bg-foreground/30" /></span>
       ) : (

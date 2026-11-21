@@ -5,15 +5,17 @@ import { useEffect, useRef, useState } from "react";
 type ProgressEvent = { progress?: number; message?: string; status?: string };
 
 /** SSE is the fast path; reconciliation also recovers missed terminal events. */
-export function useTaskProgress<T>({ taskId, active, refresh, onProgress, onClip }: {
+export function useTaskProgress<T>({ taskId, active, refresh, onProgress, onClip, onClipStarted }: {
   taskId: string;
   active: boolean;
   refresh: () => Promise<unknown>;
   onProgress: (event: ProgressEvent) => void;
   onClip: (clip: T) => void;
+  /** A clip starts being assembled (moment, title, words, layout). */
+  onClipStarted?: (data: Record<string, unknown>) => void;
 }) {
-  const callbacks = useRef({ refresh, onProgress, onClip });
-  callbacks.current = { refresh, onProgress, onClip };
+  const callbacks = useRef({ refresh, onProgress, onClip, onClipStarted });
+  callbacks.current = { refresh, onProgress, onClip, onClipStarted };
   const [reconnecting, setReconnecting] = useState(false);
 
   useEffect(() => {
@@ -54,6 +56,10 @@ export function useTaskProgress<T>({ taskId, active, refresh, onProgress, onClip
     source.addEventListener("clip_ready", (event) => {
       const data = read(event);
       if (data?.clip) callbacks.current.onClip(data.clip as T);
+    });
+    source.addEventListener("clip_started", (event) => {
+      const data = read(event);
+      if (data) callbacks.current.onClipStarted?.(data);
     });
     source.addEventListener("close", () => {
       source.close();

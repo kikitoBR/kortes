@@ -68,6 +68,17 @@ class ProgressTracker:
             json.dumps(data, default=str),
         )
 
+    async def clip_started(self, clip_index: int, total_clips: int, data: dict):
+        """A clip starts being assembled (feeds the page's assembly show)."""
+        payload = {
+            "task_id": self.task_id,
+            "event_type": "clip_started",
+            "clip_index": clip_index,
+            "total_clips": total_clips,
+            **data,
+        }
+        await self.redis.publish(f"progress:{self.task_id}", json.dumps(payload, default=str))
+
     async def complete(self, message: str = "Concluído!"):
         """Mark task as completed."""
         await self.update(100, message, "completed")

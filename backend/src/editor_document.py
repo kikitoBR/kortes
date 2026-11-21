@@ -85,14 +85,18 @@ class Framing(Model):
     zoom: float = Field(default=1, ge=1, le=3)
     x: float = Field(default=0.5, ge=0, le=1)
     y: float = Field(default=0.5, ge=0, le=1)
-    # "gameplay": the webcam box on top (1080x768), the game below (1080x1152).
-    layout: Literal["single", "gameplay"] = "single"
+    # "gameplay": webcam and game stacked (camPosition says which is on top);
+    # "float": the game fills the screen and the webcam floats top-left.
+    layout: Literal["single", "gameplay", "float"] = "single"
     webcam: WebcamBox | None = None
+    camPosition: Literal["top", "bottom"] = "top"
+    # A picture fitted whole ("contain") sits on black or on a blurred fill.
+    background: Literal["black", "blur"] = "black"
 
     @model_validator(mode="after")
     def gameplay_needs_webcam(self):
-        if self.layout == "gameplay" and self.webcam is None:
-            raise ValueError("Marque a webcam para usar o layout webcam + jogo")
+        if self.layout in {"gameplay", "float"} and self.webcam is None:
+            raise ValueError("Marque a webcam para usar este layout")
         return self
 
 
@@ -174,7 +178,12 @@ def save_document(
 
 
 def is_gameplay(framing: Framing) -> bool:
-    return framing.layout == "gameplay" and framing.webcam is not None
+    """A layout built from the webcam cut and the game cut."""
+    return framing.layout in {"gameplay", "float"} and framing.webcam is not None
+
+
+# Floating webcam, as fractions of a 1080x1920 output (same as the clip render).
+FLOAT_CAM_X, FLOAT_CAM_Y, FLOAT_CAM_W, FLOAT_CAM_BORDER = 40 / 1080, 300 / 1920, 480 / 1080, 6 / 1080
 
 
 # Share of the frame height taken by the webcam tile (768 of 1920).
@@ -221,17 +230,31 @@ def _even_crop(rect, sw: int, sh: int) -> str:
 
 
 def gameplay_geometry(framing: Framing, sw: int, sh: int, width: int, height: int) -> str:
-    """Filter chain body that stacks the webcam cut over the game cut."""
+    """Filter chain body that builds the webcam + game layout."""
+    if framing.layout == "float":
+        cam_w = max(2, round(width * FLOAT_CAM_W / 2) * 2)
+        cam_h = max(2, round(cam_w * 768 / 1080 / 2) * 2)
+        border = max(2, round(width * FLOAT_CAM_BORDER))
+        cam = webcam_cut(framing.webcam, sw, sh, cam_w / cam_h)
+        game = game_cut(framing, sw, sh, width / height)
+        x, y = round(width * FLOAT_CAM_X) - border, round(height * FLOAT_CAM_Y) - border
+        return (
+            "split=2[gpcam][gpgame];"
+            f"[gpgame]{_even_crop(game, sw, sh)},scale={width}:{height},setsar=1[gpgamev];"
+            f"[gpcam]{_even_crop(cam, sw, sh)},scale={cam_w}:{cam_h},"
+            f"pad={cam_w + 2 * border}:{cam_h + 2 * border}:{border}:{border}:white,setsar=1[gpcamv];"
+            f"[gpgamev][gpcamv]overlay={x}:{y},setsar=1"
+        )
     cam_h, game_h = gameplay_tile_heights(height)
     cam = webcam_cut(framing.webcam, sw, sh, width / cam_h)
     game = game_cut(framing, sw, sh, width / game_h)
+    order = "[gpcamv][gpgamev]" if framing.camPosition == "top" else "[gpgamev][gpcamv]"
     return (
         "split=2[gpcam][gpgame];"
         f"[gpcam]{_even_crop(cam, sw, sh)},scale={width}:{cam_h},setsar=1[gpcamv];"
         f"[gpgame]{_even_crop(game, sw, sh)},scale={width}:{game_h},setsar=1[gpgamev];"
-        "[gpcamv][gpgamev]vstack,setsar=1"
+        f"{order}vstack,setsar=1"
     )
-
 
 def output_size(document: EditDocument, width: int, height: int):
     if is_gameplay(document.framing):
@@ -382,11 +405,19 @@ def render_document(directory: Path, job_id: str, document: EditDocument, preset
     rw, rh = max(2, round(sw * scale / 2) * 2), max(2, round(sh * scale / 2) * 2)
     # Crop overflow and position letterboxing using the same normalized anchor.
     cw, ch = min(width, rw), min(height, rh)
-    geometry = (
-        gameplay_geometry(framing, sw, sh, width, height)
-        if is_gameplay(framing)
-        else f"scale={rw}:{rh},crop={cw}:{ch}:{(rw - cw) * framing.x}:{(rh - ch) * framing.y},pad={width}:{height}:{(width - cw) * framing.x}:{(height - ch) * framing.y}:black,setsar=1"
-    )
+    if is_gameplay(framing):
+        geometry = gameplay_geometry(framing, sw, sh, width, height)
+    elif framing.fit == "contain" and framing.background == "blur":
+        # The whole picture over a blurred, cropped copy of itself.
+        geometry = (
+            "split=2[blbg][blfg];"
+            f"[blbg]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
+            f"boxblur={max(2, round(20 * width / 1080))}:2,setsar=1[blbgv];"
+            f"[blfg]scale={rw}:{rh},crop={cw}:{ch}:{(rw - cw) * framing.x}:{(rh - ch) * framing.y},setsar=1[blfgv];"
+            f"[blbgv][blfgv]overlay={(width - cw) * framing.x}:{(height - ch) * framing.y},setsar=1"
+        )
+    else:
+        geometry = f"scale={rw}:{rh},crop={cw}:{ch}:{(rw - cw) * framing.x}:{(rh - ch) * framing.y},pad={width}:{height}:{(width - cw) * framing.x}:{(height - ch) * framing.y}:black,setsar=1"
     # CSS brightness/contrast use RGB multiplication followed by a midpoint shift.
     gain = fx.brightness / 100 * fx.contrast / 100
     offset = 128 * (1 - fx.contrast / 100)

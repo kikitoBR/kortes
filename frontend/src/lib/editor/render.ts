@@ -46,14 +46,10 @@ export function drawEditorFrame(
   ctx.save();
   ctx.filter = `brightness(${fx.brightness}%) contrast(${fx.contrast}%) saturate(${fx.saturation}%) blur(${(fx.blur * width) / 1080}px) hue-rotate(${fx.hue}deg)`;
   if (isGameplay(doc.framing)) {
-    const { cam, game } = gameplayTiles(
-      doc.framing,
-      sourceWidth,
-      sourceHeight,
-      width,
-      height,
-    );
-    for (const { tile, rect } of [cam, game]) {
+    const tiles = gameplayTiles(doc.framing, sourceWidth, sourceHeight, width, height);
+    const { cam, game } = tiles;
+    // Game first: a floating webcam sits on top of it.
+    for (const { tile, rect } of [game, cam]) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(tile.x, tile.y, tile.width, tile.height);
@@ -61,7 +57,32 @@ export function drawEditorFrame(
       draw(rect);
       ctx.restore();
     }
-  } else draw(frameRect(doc.framing, sourceWidth, sourceHeight, width, height));
+    if (tiles.border) {
+      ctx.save();
+      ctx.filter = "none";
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = tiles.border;
+      const b = tiles.border / 2;
+      ctx.strokeRect(cam.tile.x - b, cam.tile.y - b, cam.tile.width + 2 * b, cam.tile.height + 2 * b);
+      ctx.restore();
+    }
+  } else {
+    const rect = frameRect(doc.framing, sourceWidth, sourceHeight, width, height);
+    if (doc.framing.fit === "contain" && doc.framing.background === "blur") {
+      // The same picture, cropped to fill and blurred, behind the whole one.
+      const scale = Math.max(width / sourceWidth, height / sourceHeight);
+      ctx.save();
+      ctx.filter = `${ctx.filter === "none" ? "" : ctx.filter} blur(${(20 * width) / 1080}px)`.trim();
+      draw({
+        x: (width - sourceWidth * scale) / 2,
+        y: (height - sourceHeight * scale) / 2,
+        width: sourceWidth * scale,
+        height: sourceHeight * scale,
+      });
+      ctx.restore();
+    }
+    draw(rect);
+  }
   ctx.restore();
   if (!doc.captions.enabled) return;
   let groups = groupCache.get(doc);

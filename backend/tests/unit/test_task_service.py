@@ -559,6 +559,25 @@ async def test_audio_first_sources_render_each_clip_from_its_section(monkeypatch
     assert service.cache_repo.upsert_cache.await_args.kwargs["video_path"] is None
 
 
+@pytest.mark.asyncio
+async def test_each_clip_announces_its_assembly_for_the_show():
+    service = build_task_service()
+    service.video_service.process_video_complete.return_value["segments_to_render"] = [
+        {"start_time": "00:30", "end_time": "01:10", "hook_title": "Que susto", "text": "ele gritou muito alto"}
+    ]
+    started = AsyncMock()
+    await service.process_task(
+        task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube",
+        output_format="vertical_cam_float", clip_started_callback=started,
+    )
+    index, total, payload = started.await_args.args
+    assert (index, total) == (0, 1)
+    assert payload == {
+        "start_time": "00:30", "end_time": "01:10", "hook_title": "Que susto",
+        "words": ["ele", "gritou", "muito", "alto"], "layout": "vertical_cam_float",
+    }
+
+
 def test_reusable_clip_ids_match_order_and_moment():
     segments = [
         {"start_time": "00:00", "end_time": "00:10"},

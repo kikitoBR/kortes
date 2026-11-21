@@ -85,6 +85,11 @@ async def process_video_task(
             ):
                 await progress.clip_ready(clip_index, total_clips, clip_data)
 
+            async def clip_started_callback(
+                clip_index: int, total_clips: int, data: dict
+            ):
+                await progress.clip_started(clip_index, total_clips, data)
+
             # Process the video
             result = await task_service.process_task(
                 task_id=task_id,
@@ -102,6 +107,7 @@ async def process_video_task(
                 progress_callback=update_progress,
                 should_cancel=should_cancel,
                 clip_ready_callback=clip_ready_callback,
+                clip_started_callback=clip_started_callback,
                 cleanup_settings=cleanup_settings,
                 webcam_region=normalize_webcam_region(webcam_region),
                 hook_intro=hook_intro if isinstance(hook_intro, bool) else None,

@@ -112,6 +112,9 @@ and enqueues `watch_live` on the `supoclip_live` queue, served by the `live-work
   live clock) and rendered by `create_single_clip` with `LiveClipSource` (+ review), then saved to the task as it is
   ready (SSE `clip_ready`). Editor, caption edits, "Ajustar com IA" and "apply to all" use the archive, kept
   `LIVE_ARCHIVE_DAYS` (cron `purge_live_archives`). Edits wait until the live ends (the task is "processing").
+- **Watch:** while it runs the task page embeds the live and its chat (`components/app/live-watch.tsx`, official
+  YouTube/Twitch/Kick players; `task.live_embed` saved at creation). `GET /tasks/live/snapshot?url=` grabs the
+  stream's current frame (yt-dlp + ffmpeg) so the home page's webcam picker works for lives.
 - **Control:** `POST /tasks/{id}/live/stop` (Redis `live_stop:`) ends recording and still cuts the last moments;
   recording also stops at the plan's YouTube duration limit. A restarted worker resumes (arq retries, state.json).
 
@@ -309,9 +312,16 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
 - Virality scoring: `hook_score`, `engagement_score`, `value_score`, `shareability_score` (0-25 each, summed to `virality_score` 0-100)
 - Each segment gets an AI-written `hook_title` (3-9 words) burned into the top safe area for the first ~4s (`build_hook_title_ass` in `video_utils.py`), persisted on `generated_clips.hook_title`
 - Static talking-head crops get a slow ~5% Ken Burns punch-in (`kenburns_zoom_fragment`); tracked pans and split screens keep their own motion
+- Webcam layouts (`WEBCAM_OUTPUT_FORMATS`): `vertical_gameplay` (webcam top), `vertical_gameplay_bottom` (game top),
+  `vertical_cam_float` (game full screen, webcam 480 px wide floating at 40,300 with a white border). `vertical_blur`
+  puts the whole picture over a blurred fill. The editor mirrors them (`Framing.layout` `gameplay`/`float`,
+  `camPosition`, `background: "blur"`).
 - `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders where per-pixel motion jumps from the static room to the moving game; ported from SHARINGAN, MIT). Letterbox bars are trimmed from the game crop via cropdetect. The clip editor keeps this layout: `Framing.layout = "gameplay"` + a `webcam` box (`editor_document.py`, `frontend/src/lib/editor/document.ts`; preview, browser export and server export share the same cut math), seeded at prepare time by `gameplay_framing()` in `editor_service.py` from the same planner
 - "Ganho inicial" (`hook_intro` per task; omitted = `HOOK_FIRST_TEASER` with a hard cut): the AI hook line plays first, then a 0.5 s tape-rewind beat (`media/hook_rewind.py`) paints over a placeholder range appended to the teaser, so durations, captions and source maps stay in sync (`timeline.hook_rewind_point`)
 - "Ajustar com IA": `POST /tasks/{id}/clips/{clip_id}/adjust` `{"instructions": "começa 3 s antes"}` → `ai.adjust_clip` returns new bounds/title/teaser (validated in `clip_review.apply_adjustment`, 15 s-3 min) and the clip is rendered again from the source (`ClipEditingMixin.adjust_clip_with_text`)
+- Assembly show ("Bastidores", `components/app/assembly-show.tsx`): a canvas on the processing task page where four
+  agent cursors build each clip in a phone. The worker publishes SSE `clip_started` (`clip_show_payload`: moment,
+  title, first words, layout) before each render; `clip_ready` then plays the real clip in the phone.
 - Clip extras (on demand, nothing stored): `GET /tasks/{id}/clips/{clip_id}/cover[/suggest]` renders a cover JPEG (`media/covers.py`), `POST /tasks/{id}/clips/{clip_id}/post-texts` writes TikTok/Instagram/YouTube copy (`ai.generate_post_texts`, owner only)
 
 ## iOS App

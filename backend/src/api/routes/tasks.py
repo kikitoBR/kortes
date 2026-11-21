@@ -44,7 +44,7 @@ from ...clip_cleanup import (
     updated_cleanup_settings,
 )
 from ...video_utils import VALID_OUTPUT_FORMATS
-from ...media.common import normalize_webcam_region
+from ...media.common import WEBCAM_OUTPUT_FORMATS, normalize_webcam_region
 from ...media.covers import COVER_MAX_TEXT, pick_cover_time, render_clip_cover
 from ...ai import generate_post_texts
 from ...admin_auth import require_admin_user, user_is_admin
@@ -211,10 +211,10 @@ async def _detect_live_stream(url: str, *, requested: bool = False, quiet: bool 
     Twitch and Kick links are always treated as live channels; YouTube links
     only when asked (or when the video has no duration yet).
     """
-    from ...live.capture import live_platform, probe_live
+    from ...live.capture import is_youtube_live_link, live_platform, probe_live
 
     platform = live_platform(url)
-    if platform is None or (platform == "youtube" and not requested):
+    if platform is None or (platform == "youtube" and not requested and not is_youtube_live_link(url)):
         return None
     if not get_config().live_clipping_enabled:
         if platform == "youtube" and quiet:
@@ -244,6 +244,12 @@ async def _detect_live_stream(url: str, *, requested: bool = False, quiet: bool 
             "message": "Esse canal não está ao vivo agora. Cole o link quando a live começar. Nenhuma geração foi usada.",
         },
     )
+
+
+def live_embed_for(url: str, stream) -> Optional[Dict[str, str]]:
+    from ...live.capture import live_embed
+
+    return live_embed(url, getattr(stream, "video_id", None))
 
 
 async def _assert_live_capacity(db: AsyncSession) -> None:
@@ -449,7 +455,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     cleanup_settings = new_task_cleanup_settings(data)
     webcam_region = (
         normalize_webcam_region(data.get("webcam_region"))
-        if output_format == "vertical_gameplay"
+        if output_format in WEBCAM_OUTPUT_FORMATS
         else None
     )
     # "Ganho inicial": None keeps the server default (HOOK_FIRST_TEASER).
@@ -548,6 +554,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     | (
                         {
                             "live": True,
+                            "live_embed": live_embed_for(raw_source["url"], live_stream),
                             "live_options": live_options,
                             "live_title": source_title or "Live",
                             "live_processing_mode": processing_mode,
@@ -703,6 +710,26 @@ async def get_shared_clip_file(
     )
 
 
+@router.get("/live/snapshot")
+async def live_snapshot(url: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """What a live shows right now, as a JPEG (to mark the streamer's webcam)."""
+    from fastapi import Response
+    from ...live.capture import LiveNotOnAir, grab_live_frame, live_platform
+
+    await _get_user_id_from_headers(request, db)
+    await db.close()
+    if not isinstance(url, str) or live_platform(url) is None:
+        raise HTTPException(status_code=400, detail="Cole o link de uma live do YouTube, Twitch ou Kick")
+    try:
+        frame = await asyncio.wait_for(run_in_thread(grab_live_frame, url), timeout=90)
+    except LiveNotOnAir:
+        raise HTTPException(status_code=422, detail="Essa live não está no ar agora")
+    except Exception as exc:
+        logger.warning("Live snapshot failed for %s: %s", url, exc)
+        raise HTTPException(status_code=503, detail="Não consegui tirar o print da live agora. Tente de novo.")
+    return Response(content=frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/{task_id}")
 async def get_task(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
@@ -716,6 +743,13 @@ async def get_task(
         if not task:
             raise HTTPException(status_code=404, detail="Tarefa não encontrada")
 
+        metadata = await _load_task_source_metadata(task_id, db=db)
+        # The assembly show draws the clip's layout.
+        task["output_format"] = metadata.get("output_format") or "vertical"
+        if task.get("source_type") == "live":
+            from ...live.capture import live_embed
+
+            task["live_embed"] = metadata.get("live_embed") or live_embed(task.get("source_url") or "")
         return task
 
     except HTTPException:

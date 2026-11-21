@@ -25,6 +25,7 @@ from .common import (
     OUTPUT_FPS,
     UPSCALE_SHARPEN_FILTER,
     VERTICAL_SCALE_CHAIN,
+    WEBCAM_OUTPUT_FORMATS,
     logger,
 )
 from .face_detection import open_haar_cascade, open_yunet_detector
@@ -861,17 +862,62 @@ def detect_gameplay_plan(
         return None
 
 
-def build_gameplay_filter(regions: Dict[str, Dict[str, int]], subs: Optional[str]) -> str:
+def build_gameplay_filter(
+    regions: Dict[str, Dict[str, int]], subs: Optional[str], cam_on_top: bool = True
+) -> str:
+    """Webcam and game stacked: webcam on top (default) or game on top."""
     cam = regions["cam"]
     game = regions["game"]
     tail = f",{subs}" if subs else ""
+    order = "[cv][gv]" if cam_on_top else "[gv][cv]"
     return (
         f"[0:v]split=2[c][g];"
         f"[c]crop={cam['w']}:{cam['h']}:{cam['x']}:{cam['y']},"
         f"scale=1080:{GAMEPLAY_CAM_H}:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1[cv];"
         f"[g]crop={game['w']}:{game['h']}:{game['x']}:{game['y']},"
         f"scale=1080:{GAMEPLAY_GAME_H}:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1[gv];"
-        f"[cv][gv]vstack,setsar=1{tail}[v]"
+        f"{order}vstack,setsar=1{tail}[v]"
+    )
+
+
+# "Webcam flutuando": the game fills the screen, the webcam floats top-left,
+# under the hook title and clear of the captions. Shared with the editor.
+FLOAT_CAM_X, FLOAT_CAM_Y, FLOAT_CAM_W, FLOAT_CAM_BORDER = 40, 300, 480, 6
+
+
+def build_cam_float_filter(
+    regions: Dict[str, Dict[str, int]], width: int, height: int, subs: Optional[str]
+) -> str:
+    cam = regions["cam"]
+    game = regions["game"]
+    tail = f",{subs}" if subs else ""
+    # A 9:16 cut of the game around the same centre as the stacked layout's.
+    game_h = game["h"]
+    game_w = min(round_to_even(width), round_to_even(int(game_h * 9 / 16)))
+    centre = game["x"] + game["w"] / 2
+    game_x = clamp_even(int(centre - game_w / 2), 0, max(0, width - game_w))
+    cam_h = round_to_even(int(FLOAT_CAM_W * GAMEPLAY_CAM_H / 1080))
+    border = FLOAT_CAM_BORDER
+    return (
+        f"[0:v]split=2[c][g];"
+        f"[g]crop={game_w}:{game_h}:{game_x}:{game['y']},"
+        f"scale=1080:1920:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1[gv];"
+        f"[c]crop={cam['w']}:{cam['h']}:{cam['x']}:{cam['y']},"
+        f"scale={FLOAT_CAM_W}:{cam_h}:flags=lanczos,{UPSCALE_SHARPEN_FILTER},"
+        f"pad={FLOAT_CAM_W + 2 * border}:{cam_h + 2 * border}:{border}:{border}:white,setsar=1[cv];"
+        f"[gv][cv]overlay={FLOAT_CAM_X - border}:{FLOAT_CAM_Y - border},setsar=1{tail}[v]"
+    )
+
+
+def build_blur_filter(subs: Optional[str]) -> str:
+    """"Fundo borrado": the whole picture in the middle over a blurred fill."""
+    tail = f",{subs}" if subs else ""
+    return (
+        "[0:v]split=2[b][f];"
+        "[b]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
+        "boxblur=24:2,eq=brightness=-0.06,setsar=1[bg];"
+        "[f]scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,setsar=1[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1{tail}[v]"
     )
 
 
@@ -1493,12 +1539,33 @@ def render_reframed_clip_ffmpeg(
         ]
         return run_ffmpeg_command(command).returncode == 0, out_w, out_h
 
-    if output_format == "vertical_gameplay":
+    if output_format == "vertical_blur":
+        command = [
+            "ffmpeg", "-y", "-i", str(input_path),
+            "-filter_complex", build_blur_filter(subs),
+            "-map", "[v]", "-map", "0:a?",
+            *build_final_video_encode_args(fps=fps),
+            *audio_args,
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        if run_ffmpeg_command(command).returncode == 0:
+            return True, 1080, 1920
+        logger.warning("Blurred-background render failed; using default vertical framing")
+
+    if output_format in WEBCAM_OUTPUT_FORMATS:
         regions = detect_gameplay_plan(input_path, webcam_region)
         if regions:
+            layout_filter = (
+                build_cam_float_filter(regions, width, height, subs)
+                if output_format == "vertical_cam_float"
+                else build_gameplay_filter(
+                    regions, subs, cam_on_top=output_format == "vertical_gameplay"
+                )
+            )
             command = [
                 "ffmpeg", "-y", "-i", str(input_path),
-                "-filter_complex", build_gameplay_filter(regions, subs),
+                "-filter_complex", layout_filter,
                 "-map", "[v]", "-map", "0:a?",
                 *build_final_video_encode_args(fps=fps),
                 *audio_args,

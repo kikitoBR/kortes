@@ -61,3 +61,19 @@ describe("gameplay layout", () => {
     expect(bigger.y + bigger.h).toBeLessThanOrEqual(1);
   });
 });
+
+describe("more layouts", () => {
+  const box = { x: 0.02, y: 0.6, w: 0.25, h: 0.32 };
+  it("puts the webcam at the bottom when asked", () => {
+    const { cam, game } = gameplayTiles({ ...draft.framing, layout: "gameplay", camPosition: "bottom", webcam: box }, 1920, 1080, 1080, 1920);
+    expect(game.tile).toEqual({ x: 0, y: 0, width: 1080, height: 1152 });
+    expect(cam.tile).toEqual({ x: 0, y: 1152, width: 1080, height: 768 });
+  });
+  it("floats the webcam over a full-screen game", () => {
+    const tiles = gameplayTiles({ ...draft.framing, layout: "float", webcam: box }, 1920, 1080, 1080, 1920);
+    expect(tiles.game.tile).toEqual({ x: 0, y: 0, width: 1080, height: 1920 });
+    expect(tiles.cam.tile).toEqual({ x: 40, y: 300, width: 480, height: 342 });
+    expect(tiles.border).toBe(6);
+    expect(isGameplay({ ...draft.framing, layout: "float", webcam: box })).toBe(true);
+  });
+});

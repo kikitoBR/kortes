@@ -75,6 +75,18 @@ def clip_progress_message(index: int, total: int, failed: int) -> str:
     return message
 
 
+def clip_show_payload(segment: Dict[str, Any], output_format: str) -> Dict[str, Any]:
+    """What the page's assembly show draws while a clip is being made."""
+    words = str(segment.get("text") or "").split()
+    return {
+        "start_time": segment.get("start_time"),
+        "end_time": segment.get("end_time"),
+        "hook_title": segment.get("hook_title"),
+        "words": words[:40],
+        "layout": output_format,
+    }
+
+
 def clip_review_message(index: int, total: int) -> str:
     return f"Revisando o clipe {index + 1} de {total}..."
 
@@ -387,6 +399,7 @@ class TaskService(ClipEditingMixin):
         progress_callback: Optional[Callable] = None,
         should_cancel: Optional[Callable] = None,
         clip_ready_callback: Optional[Callable] = None,
+        clip_started_callback: Optional[Callable] = None,
         cleanup_settings: Optional[Dict[str, Any]] = None,
         webcam_region: Optional[Dict[str, float]] = None,
         hook_intro: Optional[bool] = None,
@@ -576,6 +589,13 @@ class TaskService(ClipEditingMixin):
                     clip_progress,
                     clip_progress_message(i, total_clips, failed_clips),
                 )
+                if clip_started_callback:
+                    try:
+                        await clip_started_callback(
+                            i, total_clips, clip_show_payload(segment, output_format)
+                        )
+                    except Exception:
+                        logger.debug("Assembly show event failed", exc_info=True)
 
                 # Render single clip in thread pool
                 clip_info = await self.video_service.create_single_clip(

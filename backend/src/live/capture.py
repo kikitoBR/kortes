@@ -51,11 +51,31 @@ def live_format_selector() -> str:
     return f"bv*{cap}[vcodec^=avc1]+ba/bv*{cap}+ba/b{cap}/b"
 
 
+class LiveNotOnAir(RuntimeError):
+    pass
+
+
 @dataclass
 class LiveStream:
     title: str
     is_live: bool
     inputs: List[Dict[str, Any]] = field(default_factory=list)
+    video_id: Optional[str] = None
+
+
+def live_embed(url: str, video_id: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """What the page needs to show the live and its chat (official embeds)."""
+    platform = live_platform(url)
+    if platform is None:
+        return None
+    if platform == "youtube":
+        video_id = video_id or get_youtube_video_id(url)
+        return {"platform": "youtube", "video_id": video_id} if video_id else None
+    parts = [p for p in (urlparse(url.strip()).path or "").split("/") if p]
+    channel = re.sub(r"[^A-Za-z0-9_-]", "", parts[0]) if parts else ""
+    if not channel or channel.lower() in {"popout", "videos", "directory", "embed"}:
+        return None
+    return {"platform": platform, "channel": channel}
 
 
 def probe_live(url: str) -> LiveStream:
@@ -82,7 +102,44 @@ def probe_live(url: str) -> LiveStream:
     title = str(info.get("title") or info.get("uploader") or "Live").strip()
     # YouTube appends the start date to live titles; drop it.
     title = re.sub(r"\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", "", title)[:500]
-    return LiveStream(title=title or "Live", is_live=is_live, inputs=inputs)
+    video_id = info.get("id") if live_platform(url) == "youtube" else None
+    return LiveStream(title=title or "Live", is_live=is_live, inputs=inputs, video_id=video_id)
+
+
+def _input_args(item: Dict[str, Any], *, realtime: bool = True, newest: bool = False) -> List[str]:
+    """ffmpeg input options for one stream address (or a local file, for tests)."""
+    url = str(item["url"])
+    if Path(url).exists():
+        return (["-re"] if realtime else []) + ["-i", url]
+    args: List[str] = []
+    headers = "".join(f"{k}: {v}\r\n" for k, v in (item.get("headers") or {}).items())
+    if headers:
+        args += ["-headers", headers]
+    proxy = get_config().ytdlp_proxy
+    if proxy and proxy.startswith("http"):
+        args += ["-http_proxy", proxy]
+    if re.search(r"\.m3u8|manifest", url, re.I):
+        if newest:
+            args += ["-live_start_index", "-1"]
+    else:
+        args += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+    return args + ["-i", url]
+
+
+def grab_live_frame(url: str) -> bytes:
+    """A JPEG of what the live shows right now (for marking the webcam)."""
+    stream = probe_live(url)
+    if not stream.is_live or not stream.inputs:
+        raise LiveNotOnAir(url)
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+         *_input_args(stream.inputs[0], realtime=False, newest=True),
+         "-map", "0:v:0", "-frames:v", "1", "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", "pipe:1"],
+        capture_output=True, timeout=60,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise RuntimeError((result.stderr or b"").decode(errors="replace")[-300:] or "no frame")
+    return result.stdout
 
 
 def recorder_command(
@@ -91,20 +148,8 @@ def recorder_command(
 ) -> List[str]:
     """ffmpeg reading the stream (or a local file, for tests) into pieces."""
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
-    proxy = get_config().ytdlp_proxy
     for item in inputs:
-        url = str(item["url"])
-        if Path(url).exists():
-            command += (["-re"] if realtime else []) + ["-i", url]
-            continue
-        headers = "".join(f"{k}: {v}\r\n" for k, v in (item.get("headers") or {}).items())
-        if headers:
-            command += ["-headers", headers]
-        if proxy and proxy.startswith("http"):
-            command += ["-http_proxy", proxy]
-        if not re.search(r"\.m3u8|manifest", url, re.I):
-            command += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
-        command += ["-i", url]
+        command += _input_args(item, realtime=realtime)
     audio_input = 1 if len(inputs) > 1 else 0
     return command + [
         "-map", "0:v:0?", "-map", f"{audio_input}:a:0?", "-c", "copy",
@@ -207,3 +252,13 @@ def join_pieces(pieces: Sequence[Path], output: Path) -> bool:
     if result.returncode != 0:
         logger.warning("Joining live pieces failed: %s", (result.stderr or "")[-300:])
     return result.returncode == 0 and output.exists()
+
+
+def is_youtube_live_link(url: str) -> bool:
+    """youtube.com/@channel/live or youtube.com/live/<id>: always a live."""
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host.endswith("youtube.com") and re.search(r"/live(/|$)", parsed.path or "") is not None

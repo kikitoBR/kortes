@@ -24,7 +24,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  GAMEPLAY_CAM_SHARE,
   clamp,
   editDuration,
   frameRect,
@@ -89,6 +88,15 @@ export function Preview({
   } | null>(null);
   const size = outputSize(doc, asset.width, asset.height);
   const gameplay = isGameplay(doc.framing);
+  // Where the webcam and the game show, in output pixels (for the labels).
+  const labelTiles = isGameplay(doc.framing)
+    ? gameplayTiles(doc.framing, asset.width, asset.height, size.width, size.height)
+    : null;
+  const inWebcamTile = (px: number, py: number, w: number, h: number) => {
+    if (!isGameplay(doc.framing)) return false;
+    const { tile } = gameplayTiles(doc.framing, asset.width, asset.height, w, h).cam;
+    return px >= tile.x && px <= tile.x + tile.width && py >= tile.y && py <= tile.y + tile.height;
+  };
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -209,7 +217,7 @@ export function Preview({
     ? "A fonte das legendas não pôde ser carregada. Verifique sua conexão antes de exportar."
     : tab === "framing"
       ? gameplay
-        ? "Arraste em cima para mover a webcam e embaixo para mover o jogo"
+        ? "Arraste a webcam ou o jogo para reenquadrar cada um"
         : "Arraste o vídeo para reenquadrar · legendas permanecem no lugar"
       : tab === "captions"
         ? "Arraste verticalmente para posicionar as legendas"
@@ -289,11 +297,7 @@ export function Preview({
                 startX: doc.framing.x,
                 startY: doc.framing.y,
                 captionY: doc.captions.y,
-                zone: !gameplay
-                  ? "frame"
-                  : (e.clientY - box.top) / box.height < GAMEPLAY_CAM_SHARE
-                    ? "webcam"
-                    : "game",
+                zone: !gameplay ? "frame" : inWebcamTile(e.clientX - box.left, e.clientY - box.top, box.width, box.height) ? "webcam" : "game",
                 webcam: doc.framing.webcam ?? null,
               };
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -404,21 +408,24 @@ export function Preview({
               drag.current = null;
             }}
           />
-          {gameplay && tab === "framing" && (
+          {gameplay && tab === "framing" && labelTiles && (
             <div aria-hidden className="pointer-events-none absolute inset-0">
-              <div
-                className="absolute inset-x-0 border-b border-dashed border-white/70"
-                style={{ top: 0, height: `${GAMEPLAY_CAM_SHARE * 100}%` }}
-              />
-              <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                Webcam
-              </span>
-              <span
-                className="absolute left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white"
-                style={{ top: `calc(${GAMEPLAY_CAM_SHARE * 100}% + 0.5rem)` }}
-              >
-                Jogo
-              </span>
+              {([["Webcam", labelTiles.cam.tile], ["Jogo", labelTiles.game.tile]] as const).map(([name, tile]) => (
+                <div
+                  key={name}
+                  className="absolute border border-dashed border-white/70"
+                  style={{
+                    left: `${(tile.x / size.width) * 100}%`,
+                    top: `${(tile.y / size.height) * 100}%`,
+                    width: `${(tile.width / size.width) * 100}%`,
+                    height: `${(tile.height / size.height) * 100}%`,
+                  }}
+                >
+                  <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                    {name}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
           {guides && (

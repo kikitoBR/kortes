@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Protocol
 from ..ai import LiveMoments, get_clip_duration_profile, sanitize_hook_title
 from ..clip_review import label, parse_label, transcript_excerpt
 from ..config import get_config
-from ..media.common import TRANSCRIPT_CACHE_SCHEMA_VERSION
+from ..media.common import TRANSCRIPT_CACHE_SCHEMA_VERSION, WEBCAM_OUTPUT_FORMATS
 from ..media.voice_energy import FLOOR_DB, STRONG_PEAK_Z, energy_zscores, measure_levels
 from ..utils.async_helpers import run_in_thread
 from .archive import LiveClipSource, add_archive_entry, live_dir, read_json, timing_path, write_json
@@ -202,7 +202,7 @@ class LiveSession:
         self.renders: asyncio.Queue = asyncio.Queue()
         self.render_task: Optional[asyncio.Task] = None
         self.webcam_region = options.webcam_region
-        self.webcam_checked = bool(options.webcam_region) or options.output_format != "vertical_gameplay"
+        self.webcam_checked = bool(options.webcam_region) or options.output_format not in WEBCAM_OUTPUT_FORMATS
         self.last_progress = 0.0
         self.last_seen = ""
         self.semaphore = asyncio.Semaphore(TRANSCRIBE_CONCURRENCY)
@@ -457,6 +457,17 @@ class LiveSession:
                 continue
             record["status"] = "rendering"
             await self.report(force=True)
+            started = getattr(self.hooks, "clip_started", None)
+            if started:
+                spoken = [
+                    str(w.get("text") or "")
+                    for w in self.words
+                    if record["start"] * 1000 <= w["start"] < record["end"] * 1000
+                ]
+                try:
+                    await started(record["n"] - 1, {**segment, "words": spoken[:40], "layout": self.options.output_format})
+                except Exception:
+                    logger.debug("Assembly show event failed", exc_info=True)
             try:
                 if not self.webcam_checked:
                     self.webcam_checked = True

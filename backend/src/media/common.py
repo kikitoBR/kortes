@@ -66,9 +66,15 @@ VALID_OUTPUT_FORMATS = {
     "vertical",
     "vertical_pan",
     "vertical_split",
-    "vertical_gameplay",
+    "vertical_gameplay",  # webcam on top, game below
+    "vertical_gameplay_bottom",  # game on top, webcam below
+    "vertical_cam_float",  # game full screen, webcam floating
+    "vertical_blur",  # whole picture over a blurred fill
     "original",
 }
+
+# Layouts built around the streamer's webcam (picked by hand or detected).
+WEBCAM_OUTPUT_FORMATS = {"vertical_gameplay", "vertical_gameplay_bottom", "vertical_cam_float"}
 
 
 def normalize_webcam_region(value: Any) -> Optional[Dict[str, float]]:

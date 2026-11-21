@@ -57,6 +57,10 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import Link from "next/link";
 import { ClipTile, ClipFocus, ProcessingPanel, EmptyState } from "@/components/app/clip-wall";
+import { LiveWatch } from "@/components/app/live-watch";
+import { AssemblyShow, type AssemblingClip, type ReadyFlash } from "@/components/app/assembly-show";
+import { getYouTubeThumbnailUrl } from "@/lib/video-upload";
+import type { LiveEmbed } from "@/lib/live-links";
 import { timeAgo } from "@/lib/generations";
 import { cn } from "@/lib/utils";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
@@ -98,6 +102,9 @@ interface TaskDetails {
   source_id: string;
   source_title: string;
   source_type: string;
+  source_url?: string | null;
+  live_embed?: LiveEmbed | null;
+  output_format?: string;
   status: string;
   progress?: number;
   progress_message?: string;
@@ -115,12 +122,25 @@ interface TaskDetails {
   share_enabled?: boolean;
 }
 
+/** A picture of the source for the assembly show (the live's current preview when possible). */
+function showSourceImage(task: TaskDetails): string | null {
+  const embed = task.live_embed;
+  if (embed?.platform === "youtube" && embed.video_id) return `https://i.ytimg.com/vi/${embed.video_id}/hqdefault_live.jpg`;
+  if (embed?.platform === "twitch" && embed.channel) {
+    return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${embed.channel.toLowerCase()}-640x360.jpg`;
+  }
+  if (task.source_type === "live" && task.source_url) return `/api/tasks/live/snapshot?url=${encodeURIComponent(task.source_url)}`;
+  return task.source_url ? getYouTubeThumbnailUrl(task.source_url) : null;
+}
+
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
   const { data: session } = useSession();
   const [task, setTask] = useState<TaskDetails | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
+  const [assembling, setAssembling] = useState<AssemblingClip | null>(null);
+  const [readyFlash, setReadyFlash] = useState<ReadyFlash | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -350,8 +370,21 @@ export default function TaskPage() {
       if (typeof data.progress === "number") setProgress(data.progress);
       if (typeof data.message === "string") setProgressMessage(data.message);
     },
-    onClip: (clip) => setClips((current) =>
-      [...current.filter((item) => item.id !== clip.id), clip].sort((a, b) => a.clip_order - b.clip_order)),
+    onClip: (clip) => {
+      setClips((current) =>
+        [...current.filter((item) => item.id !== clip.id), clip].sort((a, b) => a.clip_order - b.clip_order));
+      setReadyFlash({ url: getClipUrl(clip.video_url, clip.filename), title: clip.hook_title, at: Date.now() });
+    },
+    onClipStarted: (data) => setAssembling({
+      index: Number(data.clip_index ?? 0),
+      total: Number(data.total_clips ?? 0),
+      start_time: (data.start_time as string) ?? null,
+      end_time: (data.end_time as string) ?? null,
+      hook_title: (data.hook_title as string) ?? null,
+      words: Array.isArray(data.words) ? (data.words as string[]) : [],
+      layout: (data.layout as string) ?? null,
+      at: Date.now(),
+    }),
   });
 
   const runAction = async (name: string, action: () => Promise<void>) => {
@@ -762,6 +795,17 @@ export default function TaskPage() {
 
         {isActive && task ? (
           <div className="space-y-8">
+            {task.source_type === "live" && task.live_embed && <LiveWatch embed={task.live_embed} />}
+            {task.status === "processing" && (
+              <AssemblyShow
+                message={progressMessage}
+                live={task.source_type === "live"}
+                layout={assembling?.layout || task.output_format || "vertical"}
+                source={showSourceImage(task)}
+                assembling={assembling}
+                ready={readyFlash}
+              />
+            )}
             <ProcessingPanel status={task.status} progress={progress} message={progressMessage} readyCount={clips.length} live={task.source_type === "live"} />
             {clips.length > 0 && (
               <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">

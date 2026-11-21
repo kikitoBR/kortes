@@ -34,13 +34,19 @@ export interface Framing {
   zoom: number;
   x: number;
   y: number;
-  /** "gameplay": the webcam box on top (1080x768), the game below (1080x1152). */
-  layout?: "single" | "gameplay";
+  /**
+   * "gameplay": webcam and game stacked (camPosition says which is on top);
+   * "float": the game fills the screen and the webcam floats top-left.
+   */
+  layout?: "single" | "gameplay" | "float";
   webcam?: WebcamBox | null;
+  camPosition?: "top" | "bottom";
+  /** A picture fitted whole ("contain") sits on black or on a blurred fill. */
+  background?: "black" | "blur";
 }
-/** Webcam box and game cut that match the generated gameplay clip. */
-export type GameplayFraming = Pick<Framing, "zoom" | "x" | "y"> & {
-  layout: "gameplay";
+/** Webcam box and game cut that match the generated clip's layout. */
+export type GameplayFraming = Pick<Framing, "zoom" | "x" | "y" | "camPosition"> & {
+  layout: "gameplay" | "float";
   webcam: WebcamBox;
 };
 export interface Effects {
@@ -99,7 +105,9 @@ export const uid = () => crypto.randomUUID();
 export const isGameplay = (
   frame: Framing,
 ): frame is Framing & { webcam: WebcamBox } =>
-  frame.layout === "gameplay" && !!frame.webcam;
+  (frame.layout === "gameplay" || frame.layout === "float") && !!frame.webcam;
+/** Floating webcam, as fractions of a 1080x1920 output (same as the clip render). */
+export const FLOAT_CAM = { x: 40 / 1080, y: 300 / 1920, w: 480 / 1080, border: 6 / 1080 };
 /** Share of the frame height taken by the webcam tile (768 of 1920). */
 export const GAMEPLAY_CAM_SHARE = 768 / 1920;
 type Rect = { x: number; y: number; width: number; height: number };
@@ -137,7 +145,6 @@ export function gameplayTiles(
   width: number,
   height: number,
 ) {
-  const camHeight = Math.round((height * GAMEPLAY_CAM_SHARE) / 2) * 2;
   const place = (tile: Rect, cut: Cut) => {
     const scale = tile.width / cut.w;
     return {
@@ -150,15 +157,30 @@ export function gameplayTiles(
       },
     };
   };
+  if (frame.layout === "float") {
+    const camWidth = Math.max(2, Math.round((width * FLOAT_CAM.w) / 2) * 2),
+      camHeight = Math.max(2, Math.round((camWidth * 768) / 1080 / 2) * 2);
+    return {
+      cam: place(
+        { x: Math.round(width * FLOAT_CAM.x), y: Math.round(height * FLOAT_CAM.y), width: camWidth, height: camHeight },
+        webcamCut(frame.webcam, sw, sh, camWidth / camHeight),
+      ),
+      game: place({ x: 0, y: 0, width, height }, gameCut(frame, sw, sh, width / height)),
+      border: Math.max(2, Math.round(width * FLOAT_CAM.border)),
+    };
+  }
+  const camHeight = Math.round((height * GAMEPLAY_CAM_SHARE) / 2) * 2,
+    camOnTop = frame.camPosition !== "bottom";
   return {
     cam: place(
-      { x: 0, y: 0, width, height: camHeight },
+      { x: 0, y: camOnTop ? 0 : height - camHeight, width, height: camHeight },
       webcamCut(frame.webcam, sw, sh, width / camHeight),
     ),
     game: place(
-      { x: 0, y: camHeight, width, height: height - camHeight },
+      { x: 0, y: camOnTop ? camHeight : 0, width, height: height - camHeight },
       gameCut(frame, sw, sh, width / (height - camHeight)),
     ),
+    border: 0,
   };
 }
 /** Scale the webcam box around its centre, keeping it inside the frame. */

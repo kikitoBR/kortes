@@ -108,6 +108,15 @@ class ProductionLiveHooks:
             )
         return info
 
+    async def clip_started(self, index: int, segment: Dict[str, Any]) -> None:
+        await self.tracker.clip_started(index, 0, {
+            "start_time": segment.get("start_time"),
+            "end_time": segment.get("end_time"),
+            "hook_title": segment.get("hook_title"),
+            "words": segment.get("words") or [],
+            "layout": segment.get("layout"),
+        })
+
     async def save_clip(self, info: Dict[str, Any], order: int) -> Optional[str]:
         from ..database import AsyncSessionLocal
         from ..repositories.edit_transaction import task_edit_transaction

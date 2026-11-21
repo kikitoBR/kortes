@@ -64,6 +64,7 @@ from .media.ffmpeg import (
     ffmpeg_escape_filter_path,
     ffmpeg_escape_filter_value,
     ffprobe_has_audio,
+    loudnorm_filter_for,
     render_ranges_crossfade_ffmpeg,
     subtitles_filter_fragment,
 )
@@ -265,8 +266,13 @@ def create_optimized_clip(
     extend_to_sentence: bool = True,
     webcam_region: Optional[Dict[str, float]] = None,
     hook_rewind: bool = False,
+    render_source: Optional[Tuple[Path, float]] = None,
 ) -> bool:
-    """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
+    """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
+
+    ``render_source`` = (file, offset): take the picture from a section of the
+    source that starts ``offset`` seconds in (YouTube partial downloads).
+    """
     try:
         if keep_ranges:
             effective_keep_ranges = normalize_source_ranges(keep_ranges)
@@ -297,28 +303,59 @@ def create_optimized_clip(
             f"subtitles={add_subtitles} template '{caption_template}' format={'original' if keep_original else 'vertical'}"
         )
 
-        # Fast path: no subtitles + original = ffmpeg stream copy (no re-encoding)
+        # Pixels may come from a downloaded section of the source that starts
+        # `render_offset` seconds in; timing, captions and word lookups keep
+        # using absolute source time through video_path.
+        render_path, render_offset = render_source or (video_path, 0.0)
+        pixel_ranges = [
+            (max(0.0, start - render_offset), end - render_offset)
+            for start, end in effective_keep_ranges
+        ]
+        if any(start - render_offset < -0.05 for start, _ in effective_keep_ranges):
+            raise RuntimeError("The downloaded section does not cover this clip")
+
+        # Fast path: no subtitles + original = stream copy the picture; only
+        # the audio is re-encoded, levelled to -14 LUFS like every other clip.
         if not add_subtitles and not hook_title and keep_original and len(effective_keep_ranges) == 1 and extend_to_sentence:
-            fast_path_start, fast_path_end = effective_keep_ranges[0]
-            result = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-ss", str(fast_path_start),
-                    "-i", str(video_path),
-                    *audio_stream_map_args(select_audio_stream_index(video_path)),
-                    "-t", str(fast_path_end - fast_path_start),
-                    "-c", "copy",
-                    "-movflags", "+faststart",
-                    str(output_path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            if result.returncode != 0:
-                logger.error(f"ffmpeg stream copy failed: {result.stderr}")
-                return False
+            fast_path_start, fast_path_end = pixel_ranges[0]
+            with tempfile.TemporaryDirectory(prefix="supoclip_copy_") as copy_dir:
+                copied = Path(copy_dir) / "copy.mp4"
+                result = subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss", str(fast_path_start),
+                        "-i", str(render_path),
+                        *audio_stream_map_args(select_audio_stream_index(render_path)),
+                        "-t", str(fast_path_end - fast_path_start),
+                        "-c", "copy",
+                        "-movflags", "+faststart",
+                        str(copied),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if result.returncode != 0:
+                    logger.error(f"ffmpeg stream copy failed: {result.stderr}")
+                    return False
+                if not ffprobe_has_audio(copied):
+                    shutil.move(str(copied), str(output_path))
+                else:
+                    levelled = subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-i", str(copied),
+                            "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+                            *build_audio_output_args(True, loudnorm_filter=loudnorm_filter_for(copied)),
+                            "-movflags", "+faststart", str(output_path),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                    )
+                    if levelled.returncode != 0:
+                        logger.error(f"ffmpeg audio levelling failed: {levelled.stderr}")
+                        return False
             logger.info(f"Successfully created clip (stream copy): {output_path}")
             return True
 
@@ -329,8 +366,8 @@ def create_optimized_clip(
             ass_path = temp_root / "captions.ass"
 
             if not render_source_ranges_ffmpeg(
-                video_path,
-                effective_keep_ranges,
+                render_path,
+                pixel_ranges,
                 source_clip_path,
             ):
                 raise RuntimeError("ffmpeg source-range render failed")

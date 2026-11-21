@@ -308,3 +308,105 @@ export function ClipPostTextsButton({ taskId, clip }: { taskId: string; clip: Ex
     </>
   );
 }
+
+const ADJUST_EXAMPLES = [
+  "Começa 3 s antes",
+  "Termina depois da reação",
+  "Troca o título por algo mais curioso",
+  "Tira o gancho do começo",
+];
+
+/** Change a ready clip by asking for it in plain words; the server renders it again. */
+export function ClipAdjustButton({
+  taskId,
+  clip,
+  onAdjusted,
+}: {
+  taskId: string;
+  clip: ExtraClip;
+  onAdjusted: () => void | Promise<unknown>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [instructions, setInstructions] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    const request = instructions.trim();
+    if (!request || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/clips/${clip.id}/adjust`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions: request }),
+      });
+      if (!response.ok) throw new Error(await readError(response, "Não foi possível ajustar o clipe."));
+      const data = (await response.json()) as { reply?: string };
+      await onAdjusted();
+      toast.success(data.reply || "Pronto, o clipe foi refeito.");
+      setInstructions("");
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível ajustar o clipe.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        <Wand2 className="size-4" />
+        Ajustar com IA
+      </Button>
+      <Dialog open={open} onOpenChange={(next) => !loading && setOpen(next)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Ajustar o clipe {clip.clip_order}</DialogTitle>
+            <DialogDescription>
+              Diga o que mudar e o clipe é montado de novo a partir do vídeo original.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={instructions}
+            maxLength={500}
+            rows={3}
+            autoFocus
+            disabled={loading}
+            placeholder="Ex.: começa 3 s antes e troca o título por algo mais curioso"
+            onChange={(event) => setInstructions(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
+            }}
+            aria-label="O que mudar no clipe"
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {ADJUST_EXAMPLES.map((example) => (
+              <button
+                key={example}
+                type="button"
+                disabled={loading}
+                onClick={() => setInstructions(example)}
+                className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              {loading ? "Refazendo o clipe. Leva cerca de 1 a 2 minutos." : "O clipe atual é substituído pelo novo."}
+            </p>
+            <Button type="button" onClick={() => void submit()} disabled={loading || !instructions.trim()}>
+              {loading ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+              {loading ? "Ajustando…" : "Ajustar"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

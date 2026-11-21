@@ -4,7 +4,7 @@ Video service - handles video processing business logic.
 
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable, Awaitable
+from typing import TYPE_CHECKING, List, Dict, Any, Optional, Callable, Awaitable
 import logging
 import json
 import subprocess
@@ -43,7 +43,13 @@ from ..clip_source_map import (
 )
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import get_config
+from ..media.transcription import update_transcript_cache
+from ..media.voice_energy import energy_zscores, measure_voice_energy
 from ..media_storage import MediaStorage
+from ..youtube_sections import download_youtube_audio
+
+if TYPE_CHECKING:
+    from .clip_source import ClipSource
 
 logger = logging.getLogger(__name__)
 UPLOAD_URL_PREFIX = "upload://"
@@ -161,6 +167,22 @@ class VideoService:
         return video_path
 
     @staticmethod
+    async def download_audio(url: str) -> Optional[Path]:
+        """Audio-only download of a YouTube video (for long sources)."""
+        audio_path = await run_in_thread(download_youtube_audio, url)
+        if not audio_path:
+            logger.warning("Audio-first download failed; downloading the whole video")
+            return None
+        video_id = get_youtube_video_id(url)
+        if video_id:
+            try:
+                await run_in_thread(MediaStorage().restore_youtube_metadata, video_id, audio_path)
+            except BaseException:
+                await run_in_thread(cleanup_downloaded_files, video_id, source_path=audio_path)
+                raise
+        return audio_path
+
+    @staticmethod
     async def get_video_title(url: str) -> str:
         """
         Get video title asynchronously.
@@ -204,6 +226,7 @@ class VideoService:
         clip_signals: Optional[str] = None,
         performance_context: Optional[str] = None,
         clip_duration: Optional[str] = "auto",
+        voice_energy: Optional[List[float]] = None,
     ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -215,6 +238,7 @@ class VideoService:
             clip_signals=clip_signals,
             performance_context=performance_context,
             clip_duration=clip_duration,
+            voice_energy=voice_energy,
         )
         logger.info(
             f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found"
@@ -279,8 +303,15 @@ class VideoService:
         cleanup_settings: Optional[Dict[str, Any]] = None,
         webcam_region: Optional[Dict[str, float]] = None,
         hook_intro: Optional[bool] = None,
+        clip_source: Optional["ClipSource"] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Render a single clip in the thread pool and return clip_info dict, or None on failure."""
+        """Render a single clip in the thread pool and return clip_info dict, or None on failure.
+
+        ``video_path`` times the clip (word timings, sentence snapping, cleanup,
+        teaser). With ``clip_source`` the picture comes from a section of the
+        source downloaded just for this clip.
+        """
+        render_source = None
         try:
             provided_keep_ranges = normalize_source_ranges(segment.get("keep_ranges"))
             source_ranges = normalize_source_ranges(segment.get("source_ranges"))
@@ -335,6 +366,11 @@ class VideoService:
                 # the stored text word-for-word with the rendered timeline.
                 clip_text = keep_ranges_transcript_text(video_path, keep_ranges) or clip_text
 
+            if clip_source is not None:
+                bounds = source_range_bounds(keep_ranges)
+                if bounds:
+                    render_source = await clip_source.render_source(*bounds)
+
             success = await run_in_thread(
                 create_optimized_clip,
                 video_path,
@@ -351,6 +387,7 @@ class VideoService:
                 segment.get("hook_title"),
                 webcam_region=webcam_region,
                 hook_rewind=hook_intro is True,
+                render_source=render_source,
             )
 
             if not success:
@@ -384,6 +421,9 @@ class VideoService:
         except Exception as e:
             logger.error(f"Error creating clip {clip_index + 1}: {e}", exc_info=True)
             return None
+        finally:
+            if clip_source is not None:
+                clip_source.release(render_source)
 
     @staticmethod
     async def apply_single_transition(
@@ -440,6 +480,7 @@ class VideoService:
                           Signature: async def callback(progress: int, message: str, status: str)
         """
         video_path: Optional[Path] = None
+        source_media = "video"
         try:
             runtime_config = get_config()
             duration_limit = (
@@ -465,7 +506,21 @@ class VideoService:
                             f"A duração máxima permitida é de {mins} minutos."
                         )
 
-                video_path = await VideoService.download_video(url, task_id=task_id)
+                duration = (video_info or {}).get("duration") or 0
+                if (
+                    getattr(runtime_config, "youtube_partial_download", False)
+                    and getattr(runtime_config, "youtube_download_provider", "yt_dlp") == "yt_dlp"
+                    and duration >= getattr(runtime_config, "youtube_partial_download_min_seconds", 1200)
+                ):
+                    # Long video: sound first; each clip later fetches only
+                    # the minutes it shows.
+                    if progress_callback:
+                        await progress_callback(10, "Baixando o áudio do vídeo...", "processing")
+                    video_path = await VideoService.download_audio(url)
+                    if video_path:
+                        source_media = "audio"
+                if not video_path:
+                    video_path = await VideoService.download_video(url, task_id=task_id)
                 if not video_path:
                     if youtube_blocked_by_bot_check(url):
                         raise Exception(YOUTUBE_BOT_CHECK_MESSAGE)
@@ -509,6 +564,19 @@ class VideoService:
                     processing_mode=processing_mode,
                     source_url=url if source_type == "youtube" else None,
                 )
+
+            # Facts kept beside the word timings: later edits time clips from
+            # this cache after the downloaded source is gone.
+            if file_duration:
+                await run_in_thread(
+                    update_transcript_cache, video_path, source_duration=file_duration
+                )
+            voice_energy: Optional[List[float]] = None
+            try:
+                levels = await run_in_thread(measure_voice_energy, video_path)
+                voice_energy = energy_zscores(levels) if levels else None
+            except Exception as exc:
+                logger.warning("Voice energy measurement failed: %s", exc)
 
             # Preserve paid word timings before any analysis/cancellation path.
             try:
@@ -569,6 +637,7 @@ class VideoService:
                     clip_signals=clip_signals,
                     performance_context=performance_context,
                     clip_duration=clip_duration,
+                    voice_energy=voice_energy,
                 )
 
             # Step 4: Create clips
@@ -648,6 +717,11 @@ class VideoService:
                 "segments": segments_json,
                 "segments_to_render": segments_json,
                 "video_path": str(video_path),
+                # "audio": long YouTube video analysed from its sound; clips
+                # download their own sections.
+                "source_media": source_media,
+                # Per-second z-scores; the final review reads them per clip.
+                "voice_energy": voice_energy,
                 "clips": [],
                 "summary": relevant_parts.summary if relevant_parts else None,
                 "key_topics": relevant_parts.key_topics if relevant_parts else None,

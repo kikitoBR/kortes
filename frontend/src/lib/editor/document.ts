@@ -20,13 +20,29 @@ export interface CaptionStyle {
   background: boolean;
   wordsPerLine: number;
 }
+/** Where the streamer's webcam sits, as 0-1 fractions of the source frame. */
+export interface WebcamBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 export interface Framing {
   aspect: "vertical" | "square" | "original";
   fit: "contain" | "cover";
+  /** zoom/x/y place the picture; in the gameplay layout they place the game cut. */
   zoom: number;
   x: number;
   y: number;
+  /** "gameplay": the webcam box on top (1080x768), the game below (1080x1152). */
+  layout?: "single" | "gameplay";
+  webcam?: WebcamBox | null;
 }
+/** Webcam box and game cut that match the generated gameplay clip. */
+export type GameplayFraming = Pick<Framing, "zoom" | "x" | "y"> & {
+  layout: "gameplay";
+  webcam: WebcamBox;
+};
 export interface Effects {
   brightness: number;
   contrast: number;
@@ -60,6 +76,8 @@ export interface EditorState {
   fps: number;
   hasAudio: boolean;
   waveform: number[];
+  /** Gameplay framing found when the clip was prepared (gameplay tasks only). */
+  gameplay?: GameplayFraming | null;
   draft: { revision: number; document: EditDocument };
   original: EditDocument;
   jobs: ExportJob[];
@@ -78,8 +96,85 @@ export const editDuration = (doc: EditDocument) =>
 export const timecode = (time: number) =>
   `${Math.floor(Math.max(0, time) / 60)}:${(Math.max(0, time) % 60).toFixed(2).padStart(5, "0")}`;
 export const uid = () => crypto.randomUUID();
+export const isGameplay = (
+  frame: Framing,
+): frame is Framing & { webcam: WebcamBox } =>
+  frame.layout === "gameplay" && !!frame.webcam;
+/** Share of the frame height taken by the webcam tile (768 of 1920). */
+export const GAMEPLAY_CAM_SHARE = 768 / 1920;
+type Rect = { x: number; y: number; width: number; height: number };
+type Cut = { x: number; y: number; w: number; h: number };
+/** Source rect for the webcam tile: the box cover-fitted to the tile aspect around its centre. */
+export function webcamCut(box: WebcamBox, sw: number, sh: number, aspect: number): Cut {
+  const bw = box.w * sw,
+    bh = box.h * sh;
+  const [w, h] = bw / bh > aspect ? [bh * aspect, bh] : [bw, bw / aspect];
+  const cx = (box.x + box.w / 2) * sw,
+    cy = (box.y + box.h / 2) * sh;
+  return {
+    x: clamp(cx - w / 2, 0, sw - w),
+    y: clamp(cy - h / 2, 0, sh - h),
+    w,
+    h,
+  };
+}
+/** Source rect for the game tile: a full-height cut, narrowed by zoom and slid by x/y. */
+export function gameCut(frame: Framing, sw: number, sh: number, aspect: number): Cut {
+  let h = sh / frame.zoom,
+    w = h * aspect;
+  if (w > sw) [w, h] = [sw, sw / aspect];
+  return { x: (sw - w) * frame.x, y: (sh - h) * frame.y, w, h };
+}
+/**
+ * Gameplay tiles for an output of width x height. `tile` is where the cut shows;
+ * `rect` is where the whole source frame is drawn (clipped to the tile) so that
+ * the cut fills it, which keeps one draw call shape for preview and export.
+ */
+export function gameplayTiles(
+  frame: Framing & { webcam: WebcamBox },
+  sw: number,
+  sh: number,
+  width: number,
+  height: number,
+) {
+  const camHeight = Math.round((height * GAMEPLAY_CAM_SHARE) / 2) * 2;
+  const place = (tile: Rect, cut: Cut) => {
+    const scale = tile.width / cut.w;
+    return {
+      tile,
+      rect: {
+        x: tile.x - cut.x * scale,
+        y: tile.y - cut.y * scale,
+        width: sw * scale,
+        height: sh * scale,
+      },
+    };
+  };
+  return {
+    cam: place(
+      { x: 0, y: 0, width, height: camHeight },
+      webcamCut(frame.webcam, sw, sh, width / camHeight),
+    ),
+    game: place(
+      { x: 0, y: camHeight, width, height: height - camHeight },
+      gameCut(frame, sw, sh, width / (height - camHeight)),
+    ),
+  };
+}
+/** Scale the webcam box around its centre, keeping it inside the frame. */
+export function resizeWebcam(box: WebcamBox, w: number): WebcamBox {
+  const width = clamp(w, 0.04, 1),
+    height = clamp((box.h * width) / box.w, 0.02, 1);
+  return {
+    x: clamp(box.x + box.w / 2 - width / 2, 0, 1 - width),
+    y: clamp(box.y + box.h / 2 - height / 2, 0, 1 - height),
+    w: width,
+    h: height,
+  };
+}
 export function outputSize(doc: EditDocument, width: number, height: number) {
-  if (doc.framing.aspect === "vertical") return { width: 1080, height: 1920 };
+  if (doc.framing.aspect === "vertical" || isGameplay(doc.framing))
+    return { width: 1080, height: 1920 };
   if (doc.framing.aspect === "square") return { width: 1080, height: 1080 };
   const scale = Math.min(1, 1920 / Math.max(width, height));
   return {

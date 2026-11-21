@@ -29,6 +29,7 @@ const fallbackFrame = (src: string) =>
 export function WebcamRegionPicker({
   frames,
   videoFile,
+  videoSrc,
   value,
   onChange,
 }: {
@@ -36,6 +37,8 @@ export function WebcamRegionPicker({
   frames?: string[];
   /** Local upload; frames are seeked from the file itself. */
   videoFile?: File | null;
+  /** Video already on the server (the clip editor's source cut). */
+  videoSrc?: string | null;
   value: WebcamRegion | null;
   onChange: (region: WebcamRegion | null) => void;
 }) {
@@ -45,9 +48,10 @@ export function WebcamRegionPicker({
   const [frameAspect, setFrameAspect] = useState(16 / 9);
   const [frameIndex, setFrameIndex] = useState(0);
   const [imageSrc, setImageSrc] = useState<string | null>(frames?.[0] ?? null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const videoUrl = fileUrl ?? videoSrc ?? null;
 
-  const frameCount = videoFile ? FRAME_POSITIONS.length : frames?.length ?? 0;
+  const frameCount = videoUrl ? FRAME_POSITIONS.length : frames?.length ?? 0;
 
   useEffect(() => {
     setImageSrc(frames?.[frameIndex] ?? null);
@@ -55,11 +59,11 @@ export function WebcamRegionPicker({
 
   useEffect(() => {
     if (!videoFile) {
-      setVideoUrl(null);
+      setFileUrl(null);
       return;
     }
     const objectUrl = URL.createObjectURL(videoFile);
-    setVideoUrl(objectUrl);
+    setFileUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [videoFile]);
 

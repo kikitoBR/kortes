@@ -5,6 +5,7 @@ from pathlib import Path
 from ..clip_source_map import normalize_source_ranges
 from ..config import get_config
 import json
+import math
 import re
 import subprocess
 from .common import (
@@ -245,7 +246,23 @@ def output_fps_for(video_path: Path) -> int:
     return max(min(24, cap), min(cap, round(source)))
 
 
+def known_source_duration(video_path: Path) -> Optional[float]:
+    """Duration recorded in the source's transcript cache, if any."""
+    cache = Path(video_path).with_suffix(".transcript_cache.json")
+    try:
+        value = json.loads(cache.read_text()).get("source_duration")
+        return float(value) if value and float(value) > 0 else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def ffprobe_duration(video_path: Path) -> float:
+    # A YouTube source analysed from its audio (or already cleaned up) still
+    # has its duration on record next to its word timings.
+    if not Path(video_path).exists():
+        known = known_source_duration(video_path)
+        if known:
+            return known
     result = run_ffmpeg_command(
         [
             "ffprobe",
@@ -303,13 +320,65 @@ def build_final_video_encode_args(
     ]
 
 
-def build_audio_output_args(has_audio: bool, loudnorm: bool = True) -> List[str]:
+def measure_loudness(media_path: Path) -> Optional[Dict[str, float]]:
+    """EBU R128 measurement of a file's audio (loudnorm's first pass)."""
+    try:
+        result = run_ffmpeg_command(
+            [
+                "ffmpeg", "-hide_banner", "-nostdin", "-i", str(media_path),
+                "-vn", "-sn", "-af", f"{LOUDNORM_FILTER}:print_format=json",
+                "-f", "null", "-",
+            ],
+            timeout=300,
+        )
+    except Exception as exc:
+        logger.debug("Loudness measurement failed: %s", exc)
+        return None
+    if result.returncode != 0:
+        return None
+    start = (result.stderr or "").rfind("{")
+    end = (result.stderr or "").rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        payload = json.loads(result.stderr[start : end + 1])
+        measured = {
+            key: float(payload[key])
+            for key in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+    return measured if all(math.isfinite(v) for v in measured.values()) else None
+
+
+def loudnorm_filter_for(media_path: Path) -> str:
+    """Two-pass loudnorm: measure first, then a linear gain to exactly -14 LUFS.
+
+    Linear mode keeps the dynamics (no pumping); loudnorm itself falls back to
+    dynamic mode when the gain would break the true-peak ceiling. Silence or a
+    failed measurement keeps the single-pass filter.
+    """
+    measured = measure_loudness(media_path)
+    if not measured or measured["input_i"] < -70:
+        return LOUDNORM_FILTER
+    return (
+        f"{LOUDNORM_FILTER}:measured_I={measured['input_i']:.2f}"
+        f":measured_TP={measured['input_tp']:.2f}"
+        f":measured_LRA={measured['input_lra']:.2f}"
+        f":measured_thresh={measured['input_thresh']:.2f}"
+        f":offset={measured['target_offset']:.2f}:linear=true"
+    )
+
+
+def build_audio_output_args(
+    has_audio: bool, loudnorm: bool = True, loudnorm_filter: Optional[str] = None
+) -> List[str]:
     """Audio encode args (with optional loudness normalisation) or `-an`."""
     if not has_audio:
         return ["-an"]
     args: List[str] = []
     if loudnorm:
-        args += ["-af", LOUDNORM_FILTER]
+        args += ["-af", loudnorm_filter or LOUDNORM_FILTER]
     args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", "48000"]
     return args
 

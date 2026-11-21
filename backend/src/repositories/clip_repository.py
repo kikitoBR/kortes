@@ -353,6 +353,20 @@ class ClipRepository:
         await commit_unless_editing(db)
 
     @staticmethod
+    async def update_clip_hook_title(
+        db: AsyncSession, clip_id: str, hook_title: Optional[str]
+    ) -> None:
+        """Set the on-screen title stored with a clip."""
+        await db.execute(
+            sa_text(
+                "UPDATE generated_clips SET hook_title = :hook_title, updated_at = NOW() "
+                "WHERE id = :clip_id"
+            ),
+            {"clip_id": clip_id, "hook_title": hook_title},
+        )
+        await commit_unless_editing(db)
+
+    @staticmethod
     async def make_room_for_clip(db: AsyncSession, task_id: str, clip_order: int) -> None:
         """Shift following clips without colliding with the unique order key."""
         result = await db.execute(

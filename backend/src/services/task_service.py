@@ -19,6 +19,7 @@ from ..repositories.source_repository import SourceRepository
 from ..repositories.clip_repository import ClipRepository
 from ..repositories.cache_repository import CacheRepository
 from .video_service import VideoService
+from .clip_source import ClipSource
 from .clip_service import ClipEditingMixin
 from ..repositories.edit_transaction import serialized_task_edit, task_edit_transaction, TaskCancelled
 from ..repositories.task_run_guard import exclusive_task_run, task_run_guard
@@ -30,7 +31,9 @@ from .task_completion_email_service import (
 from ..config import Config, get_config
 from ..youtube_utils import cleanup_downloaded_files, extract_video_id
 from ..clip_cleanup import normalize_clip_cleanup_settings
-from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION
+from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION, review_clip
+from ..clip_review import apply_review, build_review_prompt
+from ..media.voice_energy import energy_zscores, measure_voice_energy
 from ..clip_source_map import load_clip_caption_settings
 from ..media_storage import MediaStorage, media_work
 from ..utils.async_helpers import run_in_thread
@@ -70,6 +73,10 @@ def clip_progress_message(index: int, total: int, failed: int) -> str:
     elif failed > 1:
         message += f" {failed} falharam e foram pulados."
     return message
+
+
+def clip_review_message(index: int, total: int) -> str:
+    return f"Revisando o clipe {index + 1} de {total}..."
 
 
 class TaskService(ClipEditingMixin):
@@ -159,6 +166,87 @@ class TaskService(ClipEditingMixin):
             else datetime.utcnow()
         )
         return (now - updated_at).total_seconds()
+
+    async def _review_rendered_clip(
+        self,
+        video_path: Path,
+        segment: Dict[str, Any],
+        clip_info: Dict[str, Any],
+        index: int,
+        output_dir: Path,
+        *,
+        render_options: tuple,
+        webcam_region: Optional[Dict[str, float]],
+        hook_intro: Optional[bool],
+        clip_source: Optional[ClipSource],
+        voice_energy: Optional[List[float]] = None,
+    ) -> Dict[str, Any]:
+        """One AI review of a finished clip; renders it again with the fixes.
+
+        Any failure keeps the clip as first rendered: the review only improves.
+        """
+        teaser_available = (
+            self.config.hook_first_teaser if hook_intro is None else hook_intro
+        )
+        try:
+            if voice_energy is None:
+                levels = await run_in_thread(measure_voice_energy, video_path)
+                voice_energy = energy_zscores(levels) if levels else None
+            prompt = build_review_prompt(
+                video_path,
+                segment,
+                teaser_available=teaser_available,
+                voice_energy=voice_energy,
+            )
+            review = await review_clip(prompt)
+        except Exception as exc:
+            logger.warning("Review of clip %d skipped: %s", index + 1, type(exc).__name__)
+            return clip_info
+        logger.info(
+            "Clip %d review: score %d, problems %s", index + 1, review.score, review.problems
+        )
+        outcome = apply_review(segment, review, teaser_available=teaser_available)
+        if not outcome:
+            return clip_info
+        fixed_segment, changes = outcome
+        fixed = await self.video_service.create_single_clip(
+            video_path,
+            fixed_segment,
+            index,
+            output_dir,
+            *render_options,
+            webcam_region=webcam_region,
+            hook_intro=hook_intro,
+            clip_source=clip_source,
+        )
+        if not fixed:
+            logger.warning("Clip %d: render with the review fixes failed; keeping the first", index + 1)
+            return clip_info
+        self._discard_rendered_clip(Path(clip_info["path"]))
+        note = "Revisão: " + "; ".join(changes) + "."
+        fixed["reasoning"] = "\n".join(
+            part for part in (fixed.get("reasoning") or "", note) if part
+        )
+        logger.info("Clip %d fixed by the review: %s", index + 1, "; ".join(changes))
+        return fixed
+
+    def _discard_rendered_clip(self, path: Path) -> None:
+        clips_dir = (Path(self.config.temp_dir) / "clips").resolve()
+        try:
+            if path.resolve().is_relative_to(clips_dir):
+                path.unlink(missing_ok=True)
+                path.with_suffix(".source_map.json").unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove replaced clip %s", path)
+
+    @staticmethod
+    def _cacheable_video_path(url: str, result: Dict[str, Any]) -> Optional[str]:
+        """Source path later edits may reuse; an audio-only download is not one."""
+        if url.startswith("upload://s3/"):
+            return MediaStorage().source_reference(url)
+        if result.get("source_media") == "audio":
+            return None
+        return result.get("video_path")
 
     @staticmethod
     def _cleanup_source_video(
@@ -418,7 +506,7 @@ class TaskService(ClipEditingMixin):
                     cache_key=cache_key,
                     source_url=url,
                     source_type=source_type,
-                    video_path=MediaStorage().source_reference(url) if url.startswith("upload://s3/") else result.get("video_path"),
+                    video_path=self._cacheable_video_path(url, result),
                     transcript_text=result.get("transcript"),
                     analysis_json=None,
                 )
@@ -431,12 +519,19 @@ class TaskService(ClipEditingMixin):
                 cache_key=cache_key,
                 source_url=url,
                 source_type=source_type,
-                video_path=MediaStorage().source_reference(url) if url.startswith("upload://s3/") else result.get("video_path"),
+                video_path=self._cacheable_video_path(url, result),
                 transcript_text=result.get("transcript"),
                 analysis_json=None if performance_context else result.get("analysis_json"),
             )
 
             video_path = Path(result["video_path"])
+            # Long YouTube video analysed from its audio: every clip downloads
+            # only its own section of the picture.
+            clip_source = (
+                ClipSource(video_path, url, sections=True)
+                if result.get("source_media") == "audio"
+                else None
+            )
             total_clips = len(segments_to_render)
             clips_output_dir = Path(self.config.temp_dir) / "clips"
             clips_output_dir.mkdir(parents=True, exist_ok=True)
@@ -496,9 +591,34 @@ class TaskService(ClipEditingMixin):
                     normalized_cleanup_settings,
                     webcam_region=webcam_region,
                     hook_intro=hook_intro,
+                    clip_source=clip_source,
                 )
                 pending_clip_path = Path(clip_info["path"]) if clip_info else None
                 await check_cancelled()
+                if clip_info is not None and self.config.clip_review_enabled:
+                    await update_progress(clip_progress, clip_review_message(i, total_clips))
+                    clip_info = await self._review_rendered_clip(
+                        video_path,
+                        segment,
+                        clip_info,
+                        i,
+                        clips_output_dir,
+                        render_options=(
+                            font_family,
+                            font_size,
+                            font_color,
+                            caption_template,
+                            output_format,
+                            add_subtitles,
+                            normalized_cleanup_settings,
+                        ),
+                        webcam_region=webcam_region,
+                        hook_intro=hook_intro,
+                        clip_source=clip_source,
+                        voice_energy=result.get("voice_energy"),
+                    )
+                    pending_clip_path = Path(clip_info["path"])
+                    await check_cancelled()
                 if clip_info is None:
                     failed_clips += 1
                     logger.warning(

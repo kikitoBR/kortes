@@ -534,6 +534,27 @@ def cache_transcript_data(video_path: Path, transcript) -> None:
     logger.info(f"Cached {len(words_data)} words to {cache_path}")
 
 
+def update_transcript_cache(video_path: Path, **fields: Any) -> bool:
+    """Add facts about the source (duration, voice energy) to its transcript cache.
+
+    The cache outlives the downloaded media and is backed up with it, so these
+    stay available to later edits after the source itself is gone.
+    """
+    cache_path = video_path.with_suffix(".transcript_cache.json")
+    if not cache_path.exists():
+        return False
+    try:
+        payload = json.loads(cache_path.read_text())
+        payload.update(fields)
+        temporary = cache_path.with_name(f".{cache_path.name}.tmp")
+        temporary.write_text(json.dumps(payload))
+        temporary.replace(cache_path)
+        return True
+    except Exception as exc:
+        logger.warning("Could not update transcript cache %s: %s", cache_path, exc)
+        return False
+
+
 def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
     """Load cached AssemblyAI transcript data."""
     cache_path = video_path.with_suffix(".transcript_cache.json")

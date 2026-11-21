@@ -82,9 +82,9 @@ utils/               → Thread pool helpers for blocking operations (async_help
 
 ### Video Processing Pipeline
 
-1. **Input** → YouTube URL (yt-dlp) or uploaded file
-2. **Transcription** → AssemblyAI word-level timestamps (cached as `.transcript_cache.json`)
-3. **AI Analysis** → Pydantic AI selects viral segments (15-60s each) with virality scoring. Transcripts over 15 min are analysed in 12-min windows (2-min overlap, 3 concurrent), deduplicated, then reranked together in one comparative call (`RERANK_LLM`, default `LLM`); final count scales ~1 clip per 5 min, capped by `MAX_CLIPS` (default 10)
+1. **Input** → YouTube URL (yt-dlp) or uploaded file. YouTube videos of `YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS`+ (default 20 min) download only their audio first (`youtube_sections.download_youtube_audio`); each clip then fetches just its own minutes (`download_youtube_section`: reads the mp4 `sidx` index and fetches header + first fragment + the part's fragments in 10 MB blocks over 6 connections, ported from SHARINGAN; falls back to an exact ffmpeg cut, then to the whole video). `services/clip_source.py` (`ClipSource`) times clips from the transcript cache and takes the picture from the section (`create_optimized_clip(render_source=...)`); the editor, caption edits and text adjustments use it too
+2. **Transcription** → AssemblyAI word-level timestamps (cached as `.transcript_cache.json`, which also stores `source_duration` and `voice_energy_db` so later edits work after the media is gone; `ffprobe_duration` falls back to it)
+3. **AI Analysis** → Voice energy per second (`media/voice_energy.py`, from SHARINGAN) marks transcript lines with 🔊/🔊🔊 where the volume jumps above the video's average; the marked transcript goes to the AI and the rerank sees each candidate's peak. Pydantic AI selects viral segments (15-60s each) with virality scoring. Transcripts over 15 min are analysed in 12-min windows (2-min overlap, 3 concurrent), deduplicated, then reranked together in one comparative call (`RERANK_LLM`, default `LLM`); final count scales ~1 clip per 5 min, capped by `MAX_CLIPS` (default 10)
 4. **Clip Generation** → MoviePy creates 9:16 clips with:
    - Face-centered cropping: MediaPipe → OpenCV DNN → Haar cascade (fallback chain)
    - Word-synced subtitles from AssemblyAI
@@ -92,7 +92,8 @@ utils/               → Thread pool helpers for blocking operations (async_help
    - Optional transition effects (`backend/transitions/`)
    - Optional B-roll overlays (Pexels API)
    - Caption templates with animation styles
-5. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL. Each clip is saved and pushed to the page (SSE `clip_ready`) as soon as it renders; a failed clip is skipped and counted in the progress line. A rerun of the same task (worker restart, "Retomar") keeps clips already rendered for the same moments (`reusable_clip_ids` in `task_service.py`)
+5. **Review** → `CLIP_REVIEW_ENABLED` (default on): one AI call per rendered clip (`ai.review_clip`, rules in `clip_review.py`, from SHARINGAN) reads the transcript before/inside/after with peaks; weak hook → new teaser, missing context → start up to 15 s earlier, dead start → up to 8 s later, cut ending → up to 8 s later, weak title → new `hook_title`. Fixes re-render the clip once before it is saved; any failure keeps the first render. Audio is levelled to -14 LUFS in two passes (`loudnorm_filter_for`)
+6. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL. Each clip is saved and pushed to the page (SSE `clip_ready`) as soon as it renders; a failed clip is skipped and counted in the progress line. A rerun of the same task (worker restart, "Retomar") keeps clips already rendered for the same moments (`reusable_clip_ids` in `task_service.py`)
 
 ### Frontend Architecture
 
@@ -220,6 +221,9 @@ OLLAMA_BASE_URL=http://localhost:11434/v1  # Optional for ollama:* models
 OLLAMA_API_KEY=...                   # Optional; required for Ollama Cloud
 RERANK_LLM=                          # Optional; model for the long-video candidate rerank (default: LLM)
 YOUTUBE_DOWNLOAD_PROVIDER=yt_dlp     # yt_dlp | apify
+YOUTUBE_PARTIAL_DOWNLOAD=true        # Long videos: audio first, then each clip's section only
+YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS=1200
+CLIP_REVIEW_ENABLED=true             # One AI review (and possible re-render) per clip
 
 # Optional
 PEXELS_API_KEY=...                   # B-roll stock footage
@@ -275,8 +279,9 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
 - Virality scoring: `hook_score`, `engagement_score`, `value_score`, `shareability_score` (0-25 each, summed to `virality_score` 0-100)
 - Each segment gets an AI-written `hook_title` (3-9 words) burned into the top safe area for the first ~4s (`build_hook_title_ass` in `video_utils.py`), persisted on `generated_clips.hook_title`
 - Static talking-head crops get a slow ~5% Ken Burns punch-in (`kenburns_zoom_fragment`); tracked pans and split screens keep their own motion
-- `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders where per-pixel motion jumps from the static room to the moving game; ported from SHARINGAN, MIT). Letterbox bars are trimmed from the game crop via cropdetect
+- `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders where per-pixel motion jumps from the static room to the moving game; ported from SHARINGAN, MIT). Letterbox bars are trimmed from the game crop via cropdetect. The clip editor keeps this layout: `Framing.layout = "gameplay"` + a `webcam` box (`editor_document.py`, `frontend/src/lib/editor/document.ts`; preview, browser export and server export share the same cut math), seeded at prepare time by `gameplay_framing()` in `editor_service.py` from the same planner
 - "Ganho inicial" (`hook_intro` per task; omitted = `HOOK_FIRST_TEASER` with a hard cut): the AI hook line plays first, then a 0.5 s tape-rewind beat (`media/hook_rewind.py`) paints over a placeholder range appended to the teaser, so durations, captions and source maps stay in sync (`timeline.hook_rewind_point`)
+- "Ajustar com IA": `POST /tasks/{id}/clips/{clip_id}/adjust` `{"instructions": "começa 3 s antes"}` → `ai.adjust_clip` returns new bounds/title/teaser (validated in `clip_review.apply_adjustment`, 15 s-3 min) and the clip is rendered again from the source (`ClipEditingMixin.adjust_clip_with_text`)
 - Clip extras (on demand, nothing stored): `GET /tasks/{id}/clips/{clip_id}/cover[/suggest]` renders a cover JPEG (`media/covers.py`), `POST /tasks/{id}/clips/{clip_id}/post-texts` writes TikTok/Instagram/YouTube copy (`ai.generate_post_texts`, owner only)
 
 ## iOS App

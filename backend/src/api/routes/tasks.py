@@ -993,6 +993,32 @@ async def update_clip_captions(
         )
 
 
+@router.post("/{task_id}/clips/{clip_id}/adjust")
+async def adjust_clip_with_text(
+    task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Change a ready clip from a plain request and render it again."""
+    try:
+        payload = await _read_json_object(request)
+        instructions = payload.get("instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise ValueError("Escreva o que mudar no clipe")
+        if len(instructions) > 500:
+            raise ValueError("O pedido pode ter no máximo 500 caracteres")
+        task_service = TaskService(db)
+        await _require_task_owner(request, task_service, db, task_id)
+        return await task_service.adjust_clip_with_text(task_id, clip_id, instructions)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adjusting clip: {e}")
+        raise HTTPException(
+            status_code=500, detail="Não foi possível ajustar o clipe. Tente de novo."
+        )
+
+
 @router.post("/{task_id}/clips/{clip_id}/regenerate")
 async def regenerate_clip(
     task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)

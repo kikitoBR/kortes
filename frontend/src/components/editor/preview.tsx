@@ -24,14 +24,18 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  GAMEPLAY_CAM_SHARE,
   clamp,
   editDuration,
   frameRect,
+  gameplayTiles,
+  isGameplay,
   outputSize,
   outputTime,
   timecode,
   type EditDocument,
   type EditorState,
+  type WebcamBox,
 } from "@/lib/editor/document";
 import { drawEditorFrame, loadEditorFont } from "@/lib/editor/render";
 import type { InspectorTab } from "./inspector";
@@ -79,8 +83,12 @@ export function Preview({
     startX: number;
     startY: number;
     captionY: number;
+    /** Gameplay layout: which tile the drag started on. */
+    zone: "frame" | "webcam" | "game";
+    webcam: WebcamBox | null;
   } | null>(null);
   const size = outputSize(doc, asset.width, asset.height);
+  const gameplay = isGameplay(doc.framing);
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -200,7 +208,9 @@ export function Preview({
   const hint = fontError
     ? "A fonte das legendas não pôde ser carregada. Verifique sua conexão antes de exportar."
     : tab === "framing"
-      ? "Arraste o vídeo para reenquadrar · legendas permanecem no lugar"
+      ? gameplay
+        ? "Arraste em cima para mover a webcam e embaixo para mover o jogo"
+        : "Arraste o vídeo para reenquadrar · legendas permanecem no lugar"
       : tab === "captions"
         ? "Arraste verticalmente para posicionar as legendas"
         : null;
@@ -272,12 +282,19 @@ export function Preview({
             className={`block h-full w-full touch-none ${tab === "framing" || tab === "captions" ? "cursor-move" : "cursor-default"}`}
             onPointerDown={(e) => {
               if (tab !== "framing" && tab !== "captions") return;
+              const box = e.currentTarget.getBoundingClientRect();
               drag.current = {
                 x: e.clientX,
                 y: e.clientY,
                 startX: doc.framing.x,
                 startY: doc.framing.y,
                 captionY: doc.captions.y,
+                zone: !gameplay
+                  ? "frame"
+                  : (e.clientY - box.top) / box.height < GAMEPLAY_CAM_SHARE
+                    ? "webcam"
+                    : "game",
+                webcam: doc.framing.webcam ?? null,
               };
               e.currentTarget.setPointerCapture(e.pointerId);
             }}
@@ -286,6 +303,60 @@ export function Preview({
               const box = e.currentTarget.getBoundingClientRect(),
                 deltaX = e.clientX - drag.current.x,
                 deltaY = e.clientY - drag.current.y;
+              const start = drag.current;
+              if (tab === "framing" && start.zone !== "frame" && isGameplay(doc.framing)) {
+                const tiles = gameplayTiles(
+                  doc.framing,
+                  asset.width,
+                  asset.height,
+                  box.width,
+                  box.height,
+                );
+                if (start.zone === "webcam" && start.webcam) {
+                  // Content follows the pointer, so the box moves the other way.
+                  const { rect } = tiles.cam,
+                    webcam = {
+                      ...start.webcam,
+                      x: clamp(
+                        start.webcam.x - deltaX / rect.width,
+                        0,
+                        1 - start.webcam.w,
+                      ),
+                      y: clamp(
+                        start.webcam.y - deltaY / rect.height,
+                        0,
+                        1 - start.webcam.h,
+                      ),
+                    };
+                  update(
+                    (d) => ({ ...d, framing: { ...d.framing, webcam } }),
+                    "drag-webcam",
+                  );
+                } else if (start.zone === "game") {
+                  const { tile, rect } = tiles.game,
+                    x = clamp(
+                      start.startX +
+                        (Math.abs(tile.width - rect.width) > 1
+                          ? deltaX / (tile.width - rect.width)
+                          : 0),
+                      0,
+                      1,
+                    ),
+                    y = clamp(
+                      start.startY +
+                        (Math.abs(tile.height - rect.height) > 1
+                          ? deltaY / (tile.height - rect.height)
+                          : 0),
+                      0,
+                      1,
+                    );
+                  update(
+                    (d) => ({ ...d, framing: { ...d.framing, x, y } }),
+                    "drag-frame",
+                  );
+                }
+                return;
+              }
               if (tab === "captions") {
                 const y = clamp(
                   drag.current.captionY + deltaY / box.height,
@@ -333,6 +404,23 @@ export function Preview({
               drag.current = null;
             }}
           />
+          {gameplay && tab === "framing" && (
+            <div aria-hidden className="pointer-events-none absolute inset-0">
+              <div
+                className="absolute inset-x-0 border-b border-dashed border-white/70"
+                style={{ top: 0, height: `${GAMEPLAY_CAM_SHARE * 100}%` }}
+              />
+              <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                Webcam
+              </span>
+              <span
+                className="absolute left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white"
+                style={{ top: `calc(${GAMEPLAY_CAM_SHARE * 100}% + 0.5rem)` }}
+              >
+                Jogo
+              </span>
+            </div>
+          )}
           {guides && (
             <div className="pointer-events-none absolute inset-x-[8%] top-[10%] bottom-[20%] rounded-lg border border-dashed border-white/60">
               <span className="absolute -top-5 text-[10px] text-white/70">

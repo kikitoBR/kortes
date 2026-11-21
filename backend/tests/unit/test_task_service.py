@@ -66,6 +66,8 @@ def build_task_service() -> TaskService:
     config.aws_access_key_id = "AKIATEST"
     config.aws_secret_access_key = "secret-test"
     config.ses_from_email = "SupoClip <noreply@example.com>"
+    # The final review calls the AI; tests that need it turn it on and mock it.
+    config.clip_review_enabled = False
     service = TaskService(db=AsyncMock(), config=config)
     service._load_performance_context = AsyncMock(return_value=None)
     service._processing_transaction = lambda _task_id: nullcontext()
@@ -493,6 +495,68 @@ async def test_process_task_reports_skipped_clips_in_progress():
     ]
     assert "Criando o clipe 1 de 2..." in messages
     assert "Criando o clipe 2 de 2... 1 falhou e foi pulado." in messages
+
+
+def reviewed_service(monkeypatch, review):
+    from src.ai import ClipReview
+
+    service = build_task_service()
+    service.config.clip_review_enabled = True
+    service.video_service.process_video_complete.return_value["segments_to_render"] = [
+        {"start_time": "00:30", "end_time": "01:10", "hook_title": "Título"}
+    ]
+    fixed = {**build_clip_result(), "path": "/tmp/clip-1-fixed.mp4", "end_time": "01:16"}
+    service.video_service.create_single_clip = AsyncMock(side_effect=[build_clip_result(), fixed])
+    monkeypatch.setattr(task_service_module, "measure_voice_energy", lambda _path: [])
+    reviewer = AsyncMock(
+        side_effect=review if isinstance(review, Exception) else None,
+        return_value=None if isinstance(review, Exception) else ClipReview.model_validate(review),
+    )
+    monkeypatch.setattr(task_service_module, "review_clip", reviewer)
+    return service, reviewer
+
+
+@pytest.mark.asyncio
+async def test_review_fixes_are_rendered_before_the_clip_is_saved(monkeypatch):
+    service, reviewer = reviewed_service(
+        monkeypatch, {"score": 5, "problems": ["cut_ending"], "end_time": "01:16"}
+    )
+    await service.process_task(task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube")
+
+    reviewer.assert_awaited_once()
+    assert service.video_service.create_single_clip.await_count == 2
+    fixed_segment = service.video_service.create_single_clip.await_args_list[1].args[1]
+    assert fixed_segment["end_time"] == "01:16"
+    saved = service.clip_repo.create_clip.await_args.kwargs
+    assert saved["file_path"] == "/tmp/clip-1-fixed.mp4"
+    assert "Revisão: termina 6 s depois" in saved["reasoning"]
+    messages = [c.kwargs.get("progress_message") for c in service.task_repo.update_task_status.await_args_list]
+    assert "Revisando o clipe 1 de 1..." in messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review", [{"score": 9}, RuntimeError("model down")])
+async def test_a_passing_or_failed_review_keeps_the_first_render(monkeypatch, review):
+    service, _ = reviewed_service(monkeypatch, review)
+    await service.process_task(task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube")
+
+    assert service.video_service.create_single_clip.await_count == 1
+    assert service.clip_repo.create_clip.await_args.kwargs["file_path"] == "/tmp/clip-1.mp4"
+
+
+@pytest.mark.asyncio
+async def test_audio_first_sources_render_each_clip_from_its_section(monkeypatch):
+    service = build_task_service()
+    service.video_service.process_video_complete.return_value.update(
+        {"source_media": "audio", "video_path": "/tmp/abc.m4a",
+         "segments_to_render": [{"start_time": "00:00", "end_time": "00:20"}]}
+    )
+    await service.process_task(task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube")
+
+    source = service.video_service.create_single_clip.await_args.kwargs["clip_source"]
+    assert source.sections and source.timing_path == Path("/tmp/abc.m4a")
+    # An audio-only download is never offered to later edits as the video.
+    assert service.cache_repo.upsert_cache.await_args.kwargs["video_path"] is None
 
 
 def test_reusable_clip_ids_match_order_and_moment():

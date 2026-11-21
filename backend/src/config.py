@@ -69,6 +69,15 @@ class Config:
         # bandwidth, disk and render time. 0 removes the limit.
         self.ytdlp_max_height = max(0, int(env_or_default("YTDLP_MAX_HEIGHT", "1080")))
         self.ytdlp_max_fps = max(0, int(env_or_default("YTDLP_MAX_FPS", "60")))
+        # Long YouTube videos: download the audio first (transcription and the
+        # AI only need sound), then only the minutes each clip shows.
+        self.youtube_partial_download = self._get_bool_env("YOUTUBE_PARTIAL_DOWNLOAD", True)
+        self.youtube_partial_download_min_seconds = max(
+            0, int(env_or_default("YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS", "1200"))
+        )
+        # Final review: one AI call per rendered clip that fixes a weak hook,
+        # missing context, a dead start or an ending cut mid-reaction.
+        self.clip_review_enabled = self._get_bool_env("CLIP_REVIEW_ENABLED", True)
         # Clips keep the source frame rate up to this cap (30 restores the old
         # fixed 30 fps output; higher rates roughly double render time).
         self.max_output_fps = max(1, int(env_or_default("MAX_OUTPUT_FPS", "60")))

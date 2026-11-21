@@ -353,9 +353,13 @@ def test_create_optimized_clip_fast_path_uses_keep_range_start(monkeypatch, tmp_
     class _CompletedProcess:
         returncode = 0
         stderr = ""
+        stdout = ""
 
     def fake_run(command, **_kwargs):
-        captured["command"] = command
+        # The first ffmpeg call is the stream copy; later ones level the audio.
+        captured.setdefault("command", command)
+        if command[0] == "ffmpeg":
+            Path(command[-1]).write_bytes(b"clip")
         return _CompletedProcess()
 
     monkeypatch.setattr("subprocess.run", fake_run)

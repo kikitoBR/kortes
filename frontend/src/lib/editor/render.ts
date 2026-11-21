@@ -1,6 +1,8 @@
 import {
   captionGroups,
   frameRect,
+  gameplayTiles,
+  isGameplay,
   mappedWords,
   type EditDocument,
 } from "./document";
@@ -43,7 +45,23 @@ export function drawEditorFrame(
   ctx.fillRect(0, 0, width, height);
   ctx.save();
   ctx.filter = `brightness(${fx.brightness}%) contrast(${fx.contrast}%) saturate(${fx.saturation}%) blur(${(fx.blur * width) / 1080}px) hue-rotate(${fx.hue}deg)`;
-  draw(frameRect(doc.framing, sourceWidth, sourceHeight, width, height));
+  if (isGameplay(doc.framing)) {
+    const { cam, game } = gameplayTiles(
+      doc.framing,
+      sourceWidth,
+      sourceHeight,
+      width,
+      height,
+    );
+    for (const { tile, rect } of [cam, game]) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(tile.x, tile.y, tile.width, tile.height);
+      ctx.clip();
+      draw(rect);
+      ctx.restore();
+    }
+  } else draw(frameRect(doc.framing, sourceWidth, sourceHeight, width, height));
   ctx.restore();
   if (!doc.captions.enabled) return;
   let groups = groupCache.get(doc);

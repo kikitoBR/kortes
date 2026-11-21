@@ -63,12 +63,37 @@ class CaptionStyle(Model):
     wordsPerLine: int = Field(default=4, ge=1, le=8)
 
 
+class WebcamBox(Model):
+    """Where the streamer's webcam sits, as 0-1 fractions of the source frame."""
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(ge=0.02, le=1)
+    h: float = Field(ge=0.02, le=1)
+
+    @model_validator(mode="after")
+    def inside(self):
+        if self.x + self.w > 1.001 or self.y + self.h > 1.001:
+            raise ValueError("A área da webcam precisa ficar dentro do vídeo")
+        return self
+
+
 class Framing(Model):
     aspect: Literal["vertical", "square", "original"] = "vertical"
     fit: Literal["contain", "cover"] = "cover"
+    # zoom/x/y place the picture; in the gameplay layout they place the game cut.
     zoom: float = Field(default=1, ge=1, le=3)
     x: float = Field(default=0.5, ge=0, le=1)
     y: float = Field(default=0.5, ge=0, le=1)
+    # "gameplay": the webcam box on top (1080x768), the game below (1080x1152).
+    layout: Literal["single", "gameplay"] = "single"
+    webcam: WebcamBox | None = None
+
+    @model_validator(mode="after")
+    def gameplay_needs_webcam(self):
+        if self.layout == "gameplay" and self.webcam is None:
+            raise ValueError("Marque a webcam para usar o layout webcam + jogo")
+        return self
 
 
 class Effects(Model):
@@ -148,7 +173,69 @@ def save_document(
         return payload
 
 
+def is_gameplay(framing: Framing) -> bool:
+    return framing.layout == "gameplay" and framing.webcam is not None
+
+
+# Share of the frame height taken by the webcam tile (768 of 1920).
+GAMEPLAY_CAM_SHARE = 768 / 1920
+
+
+def webcam_cut(box: WebcamBox, sw: float, sh: float, aspect: float):
+    """Source rect (x, y, w, h) for the webcam tile: the box cover-fitted to the
+    tile aspect around its centre, so the tile fills without stretching."""
+    bw, bh = box.w * sw, box.h * sh
+    if bw / bh > aspect:
+        cw, ch = bh * aspect, bh
+    else:
+        cw, ch = bw, bw / aspect
+    cx, cy = (box.x + box.w / 2) * sw, (box.y + box.h / 2) * sh
+    return (
+        min(max(cx - cw / 2, 0), sw - cw),
+        min(max(cy - ch / 2, 0), sh - ch),
+        cw,
+        ch,
+    )
+
+
+def game_cut(framing: Framing, sw: float, sh: float, aspect: float):
+    """Source rect for the game tile: a full-height cut at the tile aspect,
+    narrowed by ``zoom`` and slid by ``x``/``y``."""
+    gh = sh / framing.zoom
+    gw = gh * aspect
+    if gw > sw:
+        gw, gh = sw, sw / aspect
+    return (sw - gw) * framing.x, (sh - gh) * framing.y, gw, gh
+
+
+def gameplay_tile_heights(height: int):
+    cam = round(height * GAMEPLAY_CAM_SHARE / 2) * 2
+    return cam, height - cam
+
+
+def _even_crop(rect, sw: int, sh: int) -> str:
+    x, y, w, h = rect
+    cw = max(2, min(sw, int(w) // 2 * 2))
+    ch = max(2, min(sh, int(h) // 2 * 2))
+    return f"crop={cw}:{ch}:{min(int(x), sw - cw)}:{min(int(y), sh - ch)}"
+
+
+def gameplay_geometry(framing: Framing, sw: int, sh: int, width: int, height: int) -> str:
+    """Filter chain body that stacks the webcam cut over the game cut."""
+    cam_h, game_h = gameplay_tile_heights(height)
+    cam = webcam_cut(framing.webcam, sw, sh, width / cam_h)
+    game = game_cut(framing, sw, sh, width / game_h)
+    return (
+        "split=2[gpcam][gpgame];"
+        f"[gpcam]{_even_crop(cam, sw, sh)},scale={width}:{cam_h},setsar=1[gpcamv];"
+        f"[gpgame]{_even_crop(game, sw, sh)},scale={width}:{game_h},setsar=1[gpgamev];"
+        "[gpcamv][gpgamev]vstack,setsar=1"
+    )
+
+
 def output_size(document: EditDocument, width: int, height: int):
+    if is_gameplay(document.framing):
+        return 1080, 1920
     if document.framing.aspect == "square":
         return 1080, 1080
     if document.framing.aspect == "vertical":
@@ -295,7 +382,11 @@ def render_document(directory: Path, job_id: str, document: EditDocument, preset
     rw, rh = max(2, round(sw * scale / 2) * 2), max(2, round(sh * scale / 2) * 2)
     # Crop overflow and position letterboxing using the same normalized anchor.
     cw, ch = min(width, rw), min(height, rh)
-    geometry = f"scale={rw}:{rh},crop={cw}:{ch}:{(rw - cw) * framing.x}:{(rh - ch) * framing.y},pad={width}:{height}:{(width - cw) * framing.x}:{(height - ch) * framing.y}:black,setsar=1"
+    geometry = (
+        gameplay_geometry(framing, sw, sh, width, height)
+        if is_gameplay(framing)
+        else f"scale={rw}:{rh},crop={cw}:{ch}:{(rw - cw) * framing.x}:{(rh - ch) * framing.y},pad={width}:{height}:{(width - cw) * framing.x}:{(height - ch) * framing.y}:black,setsar=1"
+    )
     # CSS brightness/contrast use RGB multiplication followed by a midpoint shift.
     gain = fx.brightness / 100 * fx.contrast / 100
     offset = 128 * (1 - fx.contrast / 100)

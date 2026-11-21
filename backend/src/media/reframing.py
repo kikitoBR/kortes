@@ -37,6 +37,7 @@ from .ffmpeg import (
     ffprobe_duration,
     ffprobe_has_audio,
     ffprobe_video_size,
+    loudnorm_filter_for,
     output_fps_for,
     round_to_even,
     run_ffmpeg_command,
@@ -1465,13 +1466,23 @@ def render_reframed_clip_ffmpeg(
         if subtitle_ass_path
         else None
     )
-    audio_args = build_audio_output_args(has_audio)
+    # Two-pass: every clip lands on -14 LUFS, whatever the source level.
+    audio_args = build_audio_output_args(
+        has_audio, loudnorm_filter=loudnorm_filter_for(input_path) if has_audio else None
+    )
 
     if output_format == "original":
         out_w, out_h = round_to_even(width), round_to_even(height)
         if not subs:
-            shutil.copyfile(input_path, output_path)
-            return True, out_w, out_h
+            if not has_audio:
+                shutil.copyfile(input_path, output_path)
+                return True, out_w, out_h
+            # Picture untouched; only the audio is levelled.
+            command = [
+                "ffmpeg", "-y", "-i", str(input_path), "-map", "0:v:0", "-map", "0:a:0",
+                "-c:v", "copy", *audio_args, "-movflags", "+faststart", str(output_path),
+            ]
+            return run_ffmpeg_command(command).returncode == 0, out_w, out_h
         command = [
             "ffmpeg", "-y", "-i", str(input_path),
             "-vf", f"{subs},setsar=1",

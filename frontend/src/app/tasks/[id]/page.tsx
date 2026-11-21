@@ -61,7 +61,7 @@ import { timeAgo } from "@/lib/generations";
 import { cn } from "@/lib/utils";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 import { ClipPostList, ClipPublishButton, useSocialPostToasts } from "@/components/clip-publisher";
-import { ClipCoverButton, ClipPostTextsButton } from "@/components/clip-extras";
+import { ClipAdjustButton, ClipCoverButton, ClipPostTextsButton } from "@/components/clip-extras";
 import {
   ACTIVE_POST_STATUSES,
   type SocialConnection,
@@ -815,6 +815,13 @@ export default function TaskPage() {
         actions={focusedClip && task?.status === "completed" ? (
           <>
             <ClipCoverButton taskId={task.id} clip={focusedClip} />
+            {!readOnly && (
+              <ClipAdjustButton
+                taskId={task.id}
+                clip={focusedClip}
+                onAdjusted={() => fetchTaskStatus(0, 0, true)}
+              />
+            )}
             {!readOnly && <ClipPostTextsButton taskId={task.id} clip={focusedClip} />}
             <ClipPublishButton
               taskId={task.id}

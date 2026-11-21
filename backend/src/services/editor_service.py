@@ -138,6 +138,36 @@ def make_assets(directory: Path):
     }
 
 
+def gameplay_framing(clip_path: Path, webcam_region=None):
+    """Editor framing that matches the generated gameplay clip, or None.
+
+    Uses the same planner as the clip render (picked box, else detection), then
+    expresses it in editor terms: the webcam box as fractions and the game cut
+    as zoom/x/y, so the draft opens looking like the clip.
+    """
+    from ..media.reframing import detect_gameplay_plan
+    from ..media.ffmpeg import ffprobe_video_size
+
+    regions = detect_gameplay_plan(clip_path, webcam_region)
+    if not regions:
+        return None
+    width, height = ffprobe_video_size(clip_path)
+    cam, game = regions["cam"], regions["game"]
+    x, y = max(0.0, cam["x"] / width), max(0.0, cam["y"] / height)
+    return {
+        "layout": "gameplay",
+        "webcam": {
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "w": round(min(cam["w"] / width, 1 - x), 4),
+            "h": round(min(cam["h"] / height, 1 - y), 4),
+        },
+        "zoom": round(max(1.0, min(3.0, height / max(1, game["h"]))), 4),
+        "x": round(game["x"] / (width - game["w"]), 4) if width > game["w"] else 0.5,
+        "y": round(game["y"] / (height - game["h"]), 4) if height > game["h"] else 0.5,
+    }
+
+
 @media_work
 async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
     from ..database import AsyncSessionLocal
@@ -149,13 +179,16 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
         get_words_for_keep_ranges,
     )
     from ..clip_editor import _caption_words_with_timings
-    from ..clip_source_map import load_clip_caption_settings
+    from ..clip_source_map import load_clip_caption_settings, source_range_bounds
+    from .clip_source import ClipSource
 
     directory = editor_dir(get_config().temp_dir, task_id, clip_id, filename)
     storage = MediaStorage()
     shared_youtube_source = False
     source_url = None
     source = None
+    clip_source = None
+    render_source = None
     try:
         await run_in_thread(storage.restore_editor, directory)
         async with AsyncSessionLocal() as db:
@@ -183,14 +216,22 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
             caption_settings = load_clip_caption_settings(caption_path) or {}
             await db.close()
             if not source or not source.exists():
-                if source_type == "youtube":
+                if source_type == "youtube" and get_config().youtube_partial_download:
+                    # Only this clip's minutes, not the whole (maybe hours-long) video.
+                    clip_source = await ClipSource.for_task(
+                        service.video_service, source_url, source_type
+                    )
+                    bounds = source_range_bounds(ranges)
+                    render_source = await clip_source.render_source(*bounds)
+                    source = clip_source.timing_path
+                elif source_type == "youtube":
                     source = await _shared_youtube_source(
                         service.video_service, source_url, get_config().temp_dir
                     )
                     shared_youtube_source = True
                 else:
                     source = await run_in_thread(service.video_service.resolve_local_video_path, source_url)
-            if not source or not source.exists():
+            if not source or not (source.exists() or render_source):
                 raise ValueError(
                     "O vídeo original não está disponível. Restaure o arquivo original para editar este clipe."
                 )
@@ -207,10 +248,23 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
                 keep_ranges=ranges,
                 hook_title=None,
                 extend_to_sentence=False,
+                render_source=render_source,
             )
             if not rendered:
                 raise ValueError("Não foi possível preparar o vídeo original")
             metadata = await run_in_thread(make_assets, directory)
+            gameplay = None
+            if source_settings.get("output_format") == "vertical_gameplay":
+                try:
+                    gameplay = await run_in_thread(
+                        gameplay_framing, clean, source_settings.get("webcam_region")
+                    )
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "Gameplay framing for the editor failed", exc_info=True
+                    )
+            # Offered again when the user switches the draft to webcam + game.
+            metadata["gameplay"] = gameplay
             transcript = load_cached_transcript_data(source)
             timed = get_words_for_keep_ranges(transcript, ranges) if transcript else []
             words = _caption_words_with_timings(
@@ -224,7 +278,8 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
                         "framing": {
                             "aspect": "original"
                             if source_settings.get("output_format") == "original"
-                            else "vertical"
+                            else "vertical",
+                            **(gameplay or {}),
                         },
                         "captions": {
                             "enabled": source_settings.get("add_subtitles", True),
@@ -277,7 +332,12 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
         )
         atomic_json(directory / "asset.json", {"status": "failed", "error": error})
     finally:
-        if shared_youtube_source:
+        if clip_source is not None:
+            clip_source.release(render_source)
+            # A whole-video fallback stays for this video's other clips; the
+            # media sweep removes it like any other download.
+            clip_source.close(delete_full=False)
+        elif shared_youtube_source:
             pass  # other clips of this video reuse it; the media sweep removes it
         elif source is not None:
             await run_in_thread(storage.save_source_metadata, source)

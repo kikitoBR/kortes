@@ -577,6 +577,7 @@ export function EditorWorkspace({
               seek={seek}
               update={editor.update}
               applyAll={applyAll}
+              mediaUrl={`${endpoint}/media/clean.mp4`}
             />
           </>
         ) : (

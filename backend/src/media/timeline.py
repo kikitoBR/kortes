@@ -500,53 +500,11 @@ def parse_transcript_lines(transcript: str) -> List[Dict[str, Any]]:
 
 
 def detect_audio_peak_times(video_path: Path, max_peaks: int = 8) -> List[float]:
-    """Find approximate one-second audio energy peaks with ffmpeg astats."""
-    audio_stream = select_audio_stream_index(video_path)
-    if audio_stream is None:
-        return []
-    result = run_ffmpeg_command(
-        [
-            "ffmpeg",
-            "-i",
-            str(video_path),
-            "-map",
-            f"0:a:{audio_stream}",
-            "-af",
-            "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
-            "-f",
-            "null",
-            "-",
-        ],
-        timeout=600,
-    )
-    if result.returncode != 0:
-        return []
+    """Loudest seconds of the source (per-second voice energy, measured once)."""
+    from .voice_energy import energy_peak_times, energy_zscores, measure_voice_energy
 
-    current_time: Optional[float] = None
-    samples: List[Tuple[float, float]] = []
-    for line in result.stderr.splitlines():
-        time_match = re.search(r"pts_time:([0-9.]+)", line)
-        if time_match:
-            current_time = float(time_match.group(1))
-            continue
-        rms_match = re.search(r"lavfi\.astats\.Overall\.RMS_level=([-0-9.]+)", line)
-        if rms_match and current_time is not None:
-            try:
-                samples.append((current_time, float(rms_match.group(1))))
-            except ValueError:
-                pass
-            current_time = None
-
-    if not samples:
-        return []
-    samples.sort(key=lambda item: item[1], reverse=True)
-    peaks: List[float] = []
-    for timestamp, _ in samples:
-        if all(abs(timestamp - existing) >= 4.0 for existing in peaks):
-            peaks.append(timestamp)
-        if len(peaks) >= max_peaks:
-            break
-    return sorted(peaks)
+    levels = measure_voice_energy(video_path)
+    return energy_peak_times(energy_zscores(levels), max_peaks=max_peaks) if levels else []
 
 
 def build_clip_signal_summary(video_path: Path, transcript: str) -> str:

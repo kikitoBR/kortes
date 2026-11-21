@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  ScanFace,
   Trash2,
   Volume2,
 } from "lucide-react";
@@ -31,9 +32,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { WebcamRegionPicker } from "@/components/webcam-region-picker";
+import {
   DEFAULT_EFFECTS,
   clamp,
+  isGameplay,
   replaceWords,
+  resizeWebcam,
   uid,
   type EditDocument,
   type CaptionStyle,
@@ -109,6 +121,8 @@ interface Props {
   seek: (value: number) => void;
   update: (change: (doc: EditDocument) => EditDocument, group?: string) => void;
   applyAll: (style: CaptionStyle) => Promise<void>;
+  /** The clip's source cut, for marking the webcam on real frames. */
+  mediaUrl: string;
 }
 export function Inspector({
   doc,
@@ -119,10 +133,48 @@ export function Inspector({
   seek,
   update,
   applyAll,
+  mediaUrl,
 }: Props) {
   const scriptWords = useRef(doc.words);
   const [script, setScript] = useState<string | null>(null),
-    [applying, setApplying] = useState(false);
+    [applying, setApplying] = useState(false),
+    [pickerOpen, setPickerOpen] = useState(false);
+  const landscape = asset.width / Math.max(1, asset.height) > 1.2,
+    gameplay = isGameplay(doc.framing);
+  const enterGameplay = () => {
+    const known = doc.framing.webcam ?? asset.gameplay?.webcam;
+    if (known) {
+      const game = asset.gameplay ?? { x: 0.5, y: 0.5, zoom: 1 };
+      update((d) => ({
+        ...d,
+        framing: {
+          ...d.framing,
+          x: game.x,
+          y: game.y,
+          zoom: game.zoom,
+          layout: "gameplay",
+          webcam: d.framing.webcam ?? known,
+        },
+      }));
+      return;
+    }
+    // Nothing detected for this clip: start bottom-left, where most
+    // streamers keep the camera, and let the user mark it on a real frame.
+    const w = 0.26,
+      h = Math.min(0.9, (w * asset.width) / asset.height / (1080 / 768));
+    update((d) => ({
+      ...d,
+      framing: {
+        ...d.framing,
+        x: 0.5,
+        y: 0.5,
+        zoom: 1,
+        layout: "gameplay",
+        webcam: { x: 0.02, y: Math.max(0, 0.98 - h), w, h },
+      },
+    }));
+    setPickerOpen(true);
+  };
   const caption = (change: Partial<CaptionStyle>, group = "caption-style") =>
     update((d) => ({ ...d, captions: { ...d.captions, ...change } }), group);
   return (
@@ -585,6 +637,102 @@ export function Inspector({
             </Section>
           </TabsContent>
           <TabsContent value="framing" className="space-y-6 p-4">
+            {landscape && (
+              <>
+                <Section
+                  title="Layout"
+                  description={
+                    gameplay
+                      ? "A webcam vai em cima e o jogo embaixo, como nos cortes de live."
+                      : "Use webcam + jogo em vídeos de live com a câmera num canto da tela."
+                  }
+                >
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    aria-label="Layout"
+                    className="w-full"
+                    value={gameplay ? "gameplay" : "single"}
+                    onValueChange={(layout) => {
+                      if (layout === "gameplay") enterGameplay();
+                      else if (layout === "single")
+                        update((d) => ({
+                          ...d,
+                          framing: {
+                            ...d.framing,
+                            layout: "single",
+                            x: 0.5,
+                            y: 0.5,
+                            zoom: 1,
+                          },
+                        }));
+                    }}
+                  >
+                    <ToggleGroupItem value="single" className="flex-1 text-xs">
+                      Tela cheia
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="gameplay" className="flex-1 text-xs">
+                      Webcam + jogo
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </Section>
+                <Separator />
+              </>
+            )}
+            {gameplay && doc.framing.webcam ? (
+              <Section
+                title="Webcam"
+                description="Arraste a parte de cima da pré-visualização para mover a webcam."
+              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setPickerOpen(true)}
+                >
+                  <ScanFace />
+                  Marcar webcam no vídeo
+                </Button>
+                <Range
+                  label="Tamanho da área"
+                  min={4}
+                  max={100}
+                  value={doc.framing.webcam.w * 100}
+                  unit="%"
+                  onChange={(w) =>
+                    update(
+                      (d) =>
+                        d.framing.webcam
+                          ? {
+                              ...d,
+                              framing: {
+                                ...d.framing,
+                                webcam: resizeWebcam(d.framing.webcam, w / 100),
+                              },
+                            }
+                          : d,
+                      "webcam-size",
+                    )
+                  }
+                />
+                {asset.gameplay && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() =>
+                      update((d) => ({
+                        ...d,
+                        framing: { ...d.framing, ...asset.gameplay },
+                      }))
+                    }
+                  >
+                    <RotateCcw />
+                    Voltar ao enquadramento do clipe
+                  </Button>
+                )}
+              </Section>
+            ) : (
             <Section
               title="Enquadramento"
               description="Arraste o vídeo na pré-visualização para manter o foco no assunto."
@@ -655,8 +803,16 @@ export function Inspector({
                 </ToggleGroup>
               </Field>
             </Section>
+            )}
             <Separator />
-            <Section title="Posição">
+            <Section
+              title={gameplay ? "Jogo" : "Posição"}
+              description={
+                gameplay
+                  ? "Zoom e posição do jogo na parte de baixo."
+                  : undefined
+              }
+            >
               <Range
                 label="Zoom"
                 min={1}
@@ -709,9 +865,39 @@ export function Inspector({
                 }
               >
                 <AlignCenter />
-                Centralizar assunto
+                {gameplay ? "Centralizar jogo" : "Centralizar assunto"}
               </Button>
             </Section>
+            <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Onde fica a webcam?</DialogTitle>
+                  <DialogDescription>
+                    A área marcada vai para a parte de cima do clipe e o jogo
+                    fica embaixo.
+                  </DialogDescription>
+                </DialogHeader>
+                <WebcamRegionPicker
+                  videoSrc={mediaUrl}
+                  value={doc.framing.webcam ?? null}
+                  onChange={(webcam) =>
+                    webcam &&
+                    update(
+                      (d) => ({
+                        ...d,
+                        framing: { ...d.framing, layout: "gameplay", webcam },
+                      }),
+                      "pick-webcam",
+                    )
+                  }
+                />
+                <DialogFooter>
+                  <Button type="button" onClick={() => setPickerOpen(false)}>
+                    Concluir
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </TabsContent>
           <TabsContent value="audio" className="space-y-6 p-4">
             <Section

@@ -422,47 +422,19 @@ class ClipEditingMixin:
         if not task:
             raise ValueError("Tarefa não encontrada")
 
-        transcript_video_path: Optional[Path] = None
-        source_url = task.get("source_url")
-        source_type = task.get("source_type")
-        processing_mode = (
-            task.get("processing_mode") or self.config.default_processing_mode
-        )
-        if source_url and source_type:
-            cache_entry = await self.cache_repo.get_cache(
-                self.db,
-                self._build_cache_key(source_url, source_type, processing_mode),
-            )
-            cached_video_path = cache_entry.get("video_path") if cache_entry else None
-            if cached_video_path:
-                transcript_video_path = await run_in_thread(MediaStorage().local_path, cached_video_path)
-            elif source_type != "youtube":
-                try:
-                    transcript_video_path = await run_in_thread(self.video_service.resolve_local_video_path,
-                        source_url
-                    )
-                except ValueError:
-                    transcript_video_path = None
-
         # Always render from the source; overlaying an already captioned clip
         # stacks old and new captions and compounds quality loss on every save.
-        downloaded_source: Optional[Path] = None
-        if not transcript_video_path or not transcript_video_path.exists():
-            if source_type == "youtube" and source_url:
-                downloaded = await self.video_service.download_video(source_url)
-                transcript_video_path = Path(downloaded) if downloaded else None
-                downloaded_source = transcript_video_path
-            elif source_url:
-                transcript_video_path = await run_in_thread(self.video_service.resolve_local_video_path, source_url)
-        if not transcript_video_path or not transcript_video_path.exists():
-            raise ValueError("O vídeo original não está mais disponível. Envie de novo para editar as legendas.")
-
+        # A YouTube source brings down only this clip's minutes.
+        source_ranges = await run_in_thread(self._get_clip_source_ranges, clip)
+        bounds = source_range_bounds(source_ranges)
+        if not bounds:
+            raise ValueError("O tempo de origem do clipe não está disponível")
+        clip_source = await self._clip_source_for_task(task)
+        render_source = None
         try:
+            render_source = await clip_source.render_source(*bounds)
+            transcript_video_path = clip_source.timing_path
             settings = await self._load_task_source_settings(task_id)
-            source_ranges = await run_in_thread(self._get_clip_source_ranges, clip)
-            bounds = source_range_bounds(source_ranges)
-            if not bounds:
-                raise ValueError("O tempo de origem do clipe não está disponível")
             output_dir = Path(self.config.temp_dir) / "clips"
             output_dir.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="caption_edit_", dir=output_dir) as temporary:
@@ -480,6 +452,7 @@ class ClipEditingMixin:
                     extend_to_sentence=False,
                     webcam_region=settings.get("webcam_region"),
                     hook_rewind=settings.get("hook_intro") is True,
+                    render_source=render_source,
                 )
                 if not rendered:
                     raise ValueError("Não foi possível preparar o clipe para editar as legendas")
@@ -495,8 +468,8 @@ class ClipEditingMixin:
                     position_y=position_y,
                 )
         finally:
-            if downloaded_source is not None:
-                self._cleanup_source_video(downloaded_source, "youtube", source_url)
+            clip_source.release(render_source)
+            await run_in_thread(clip_source.close)
         save_clip_source_ranges(output_path, source_ranges)
         save_clip_caption_settings(output_path, {
             "font_size": font_size if font_size is not None else task.get("font_size"),
@@ -517,6 +490,114 @@ class ClipEditingMixin:
         )
         return (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {}
 
+
+    @serialized_task_edit
+    async def adjust_clip_with_text(
+        self, task_id: str, clip_id: str, instructions: str
+    ) -> Dict[str, Any]:
+        """Change a ready clip from a plain request ("começa 3 s antes",
+        "troca a headline") and render it again from the source."""
+        from ..ai import adjust_clip
+        from ..clip_review import apply_adjustment, build_adjust_prompt, segment_from_clip
+        from ..media.voice_energy import energy_zscores, measure_voice_energy
+
+        instructions = (instructions or "").strip()
+        if not instructions:
+            raise ValueError("Escreva o que mudar no clipe")
+        clip = await self.clip_repo.get_clip_by_id(self.db, clip_id)
+        if not clip or clip["task_id"] != task_id:
+            raise ValueError("Clipe não encontrado")
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task:
+            raise ValueError("Tarefa não encontrada")
+
+        ranges = await run_in_thread(self._get_clip_source_ranges, clip)
+        segment = segment_from_clip(clip, ranges)
+        settings = await self._load_task_source_settings(task_id)
+        clip_source = await self._clip_source_for_task(task)
+        try:
+            timing_path = clip_source.timing_path
+            levels = await run_in_thread(measure_voice_energy, timing_path)
+            prompt = build_adjust_prompt(
+                timing_path,
+                segment,
+                instructions,
+                voice_energy=energy_zscores(levels) if levels else None,
+            )
+            try:
+                adjustment = await adjust_clip(prompt)
+            except Exception as exc:
+                logger.warning("Clip adjustment request failed: %s", type(exc).__name__)
+                raise ValueError("A IA não respondeu agora. Tente de novo em instantes.") from exc
+            adjusted = apply_adjustment(segment, adjustment)
+            output_dir = Path(self.config.temp_dir) / "clips"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            info = await self.video_service.create_single_clip(
+                clip_source.timing_path,
+                adjusted,
+                max(0, int(clip.get("clip_order") or 1) - 1),
+                output_dir,
+                task.get("font_family") or None,
+                task.get("font_size") or None,
+                task.get("font_color") or None,
+                task.get("caption_template") or "default",
+                settings.get("output_format", "vertical"),
+                settings.get("add_subtitles", True),
+                normalize_clip_cleanup_settings(
+                    settings.get("cut_long_pauses"),
+                    settings.get("pause_threshold_ms"),
+                    settings.get("remove_filler_words"),
+                    settings.get("filtered_words"),
+                ),
+                webcam_region=settings.get("webcam_region"),
+                hook_intro=settings.get("hook_intro"),
+                clip_source=clip_source,
+            )
+        finally:
+            await run_in_thread(clip_source.close)
+        if not info:
+            raise ValueError("Não foi possível montar o clipe de novo. Tente outra vez.")
+
+        await self.clip_repo.update_clip(
+            self.db,
+            clip_id,
+            info["filename"],
+            info["path"],
+            info["start_time"],
+            info["end_time"],
+            info["duration"],
+            info.get("text") or "",
+        )
+        if adjusted.get("hook_title") != clip.get("hook_title"):
+            await self.clip_repo.update_clip_hook_title(self.db, clip_id, adjusted.get("hook_title"))
+        return {
+            "clip": (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {},
+            "reply": (adjustment.reply or "").strip()[:300] or "Pronto, o clipe foi refeito.",
+        }
+
+    async def _clip_source_for_task(self, task: Dict[str, Any]) -> "ClipSource":
+        """Where a finished task's clips take their picture from when re-rendered."""
+        from .clip_source import ClipSource
+
+        source_url = task.get("source_url")
+        source_type = task.get("source_type")
+        if not source_url or not source_type:
+            raise ValueError("O link de origem da tarefa está ausente")
+        processing_mode = task.get("processing_mode") or self.config.default_processing_mode
+        cache_entry = await self.cache_repo.get_cache(
+            self.db, self._build_cache_key(source_url, source_type, processing_mode)
+        )
+        try:
+            return await ClipSource.for_task(
+                self.video_service,
+                source_url,
+                source_type,
+                cache_entry.get("video_path") if cache_entry else None,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "O vídeo original não está mais disponível. Envie de novo para editar este clipe."
+            ) from exc
 
     @staticmethod
     def _seconds_to_mmss(seconds: float) -> str:

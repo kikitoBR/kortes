@@ -3,7 +3,7 @@ AI-related functions for transcript analysis with enhanced precision and viralit
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Sequence
 import asyncio
 import logging
 import os
@@ -26,6 +26,14 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from .config import Config, env_or_default, get_config
 from .runtime_settings import apply_settings_to_process_env
+from .media.voice_energy import (
+    ENERGY_PROMPT_NOTE,
+    PEAK_Z,
+    STRONG_PEAK_Z,
+    annotate_transcript,
+    peak_level,
+    strip_markers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +95,7 @@ def get_clip_duration_profile(clip_duration: Optional[str] = None) -> dict[str, 
     return CLIP_DURATION_PROFILES.get(norm, CLIP_DURATION_PROFILES["auto"])
 
 
-TRANSCRIPT_ANALYSIS_CACHE_VERSION = "windowed-rerank-v7"
+TRANSCRIPT_ANALYSIS_CACHE_VERSION = "windowed-rerank-v8-energy"
 TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS = 3
 TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS = 600
 # Long transcripts are analysed in overlapping windows so every part of the
@@ -776,23 +784,38 @@ def _hook_title_language_rule() -> str:
 
 
 def build_candidate_rerank_prompt(
-    candidates: List[TranscriptSegment], performance_context: str | None = None
+    candidates: List[TranscriptSegment],
+    performance_context: str | None = None,
+    voice_energy: Optional[Sequence[float]] = None,
 ) -> str:
     """Describe every candidate in full so the reranker can compare them."""
     blocks = []
     for candidate_id, segment in enumerate(candidates):
-        duration = _parse_transcript_timestamp_seconds(
-            segment.end_time
-        ) - _parse_transcript_timestamp_seconds(segment.start_time)
+        start = _parse_transcript_timestamp_seconds(segment.start_time)
+        end = _parse_transcript_timestamp_seconds(segment.end_time)
+        peak = ""
+        if voice_energy:
+            level = peak_level(voice_energy, start, end)
+            peak = "\nvoice peak: " + (
+                "very strong 🔊🔊" if level >= STRONG_PEAK_Z else "yes 🔊" if level >= PEAK_Z else "none"
+            )
         blocks.append(
             f"candidate_id: {candidate_id}\n"
-            f"time: {segment.start_time} - {segment.end_time} ({duration}s)\n"
-            f"hook_title: {segment.hook_title or '(none)'}\n"
+            f"time: {segment.start_time} - {segment.end_time} ({end - start}s)\n"
+            f"hook_title: {segment.hook_title or '(none)'}{peak}\n"
             f"text: {segment.text}"
         )
+    energy_note = (
+        "\n\nA voice peak means the volume jumps well above the video's average "
+        "(shouting, celebrating, a scare, a loud game moment); in live streams these "
+        "clips usually hold viewers best."
+        if voice_energy
+        else ""
+    )
     return (
         f"Rank these {len(candidates)} clip candidates from the same video, best first.\n\n"
         + "\n\n".join(blocks)
+        + energy_note
         + _performance_history_section(performance_context)
     )
 
@@ -804,6 +827,7 @@ def build_transcript_analysis_prompt(
     window: tuple[int, int] | None = None,
     performance_context: str | None = None,
     clip_duration: Optional[str] = "auto",
+    voice_energy: Optional[Sequence[float]] = None,
 ) -> str:
     """Build the grounded task prompt for transcript analysis.
 
@@ -835,6 +859,10 @@ def build_transcript_analysis_prompt(
         )
 
     profile = get_clip_duration_profile(clip_duration)
+    energy_section = ""
+    if voice_energy:
+        transcript = annotate_transcript(transcript, voice_energy)
+        energy_section = f"\n\nVoice energy:\n{ENERGY_PROMPT_NOTE}"
 
     return f"""Analyze this video transcript and identify the most engaging segments for short-form content.
 {window_note}
@@ -862,7 +890,7 @@ Critical accuracy requirements:
 - If a span lacks enough context to stand alone, expand to nearby contiguous lines rather than guessing.
 - If there is a tradeoff between "viral" and "accurate", choose accuracy.
 - Do not reject or penalize a segment simply because of the subject matter; stay content-neutral and assess clip quality only.
-{signal_section}{performance_section}
+{signal_section}{energy_section}{performance_section}
 
 JSON-only output requirements:
 - Return one valid JSON object and nothing else.
@@ -888,10 +916,11 @@ def sanitize_hook_title(raw: Optional[str]) -> Optional[str]:
     """
     if not raw:
         return None
-    title = str(raw).strip()
+    title = strip_markers(str(raw)).strip()
     title = title.strip("\"'`“”‘’").strip()
     title = re.sub(r"#\w+", "", title)
     title = re.sub(r"\s+", " ", title).strip()
+    title = title.strip("\"'`“”‘’").strip()
     # Drop trailing sentence punctuation but keep ?/! (they carry the hook).
     title = title.rstrip(".,;:-–— ").strip()
     if not title:
@@ -1385,7 +1414,9 @@ def apply_candidate_ranking(
 
 
 async def rerank_candidates(
-    candidates: List[TranscriptSegment], performance_context: str | None = None
+    candidates: List[TranscriptSegment],
+    performance_context: str | None = None,
+    voice_energy: Optional[Sequence[float]] = None,
 ) -> List[TranscriptSegment]:
     """Compare all candidates in one call; keep first-pass order if that fails.
 
@@ -1398,7 +1429,7 @@ async def rerank_candidates(
         agent = get_rerank_agent()
         result = await _run_transcript_analysis(
             agent,
-            build_candidate_rerank_prompt(candidates, performance_context),
+            build_candidate_rerank_prompt(candidates, performance_context, voice_energy),
             timeout_seconds=RERANK_TIMEOUT_SECONDS,
         )
         reranked = apply_candidate_ranking(candidates, result.output)
@@ -1419,6 +1450,7 @@ async def _analyze_transcript_windows(
     clip_signals: Optional[str],
     performance_context: Optional[str] = None,
     clip_duration: Optional[str] = "auto",
+    voice_energy: Optional[Sequence[float]] = None,
 ) -> List[TranscriptAnalysis]:
     """Analyse windows with bounded concurrency, tolerating some failures.
 
@@ -1437,6 +1469,7 @@ async def _analyze_transcript_windows(
                 window=(window["start"], window["end"]),
                 performance_context=performance_context,
                 clip_duration=clip_duration,
+                voice_energy=voice_energy,
             )
             result = await _run_transcript_analysis(agent, prompt)
             return result.output
@@ -1656,8 +1689,11 @@ async def get_most_relevant_parts_by_transcript(
     clip_signals: str | None = None,
     performance_context: str | None = None,
     clip_duration: Optional[str] = "auto",
+    voice_energy: Optional[Sequence[float]] = None,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection.
+
+    ``voice_energy`` (per-second z-scores) marks the lines where the voice peaks.
 
     Short transcripts are analysed in one call. Long ones are split into
     overlapping windows analysed concurrently, then deduplicated and reranked
@@ -1682,13 +1718,15 @@ async def get_most_relevant_parts_by_transcript(
                     clip_signals=clip_signals,
                     performance_context=performance_context,
                     clip_duration=clip_duration,
+                    voice_energy=voice_energy,
                 )
             )
             analyses = [result.output]
         else:
             logger.info("Analysing transcript in %d overlapping windows", len(windows))
             analyses = await _analyze_transcript_windows(
-                agent, windows, include_broll, clip_signals, performance_context, clip_duration=clip_duration
+                agent, windows, include_broll, clip_signals, performance_context,
+                clip_duration=clip_duration, voice_energy=voice_energy,
             )
 
         candidates: List[TranscriptSegment] = []
@@ -1706,7 +1744,7 @@ async def get_most_relevant_parts_by_transcript(
         # near-duplicates; then compare across windows in one rerank call.
         candidates = dedupe_overlapping_segments(candidates)
         if len(windows) > 1:
-            candidates = await rerank_candidates(candidates, performance_context)
+            candidates = await rerank_candidates(candidates, performance_context, voice_energy)
 
         source_seconds = max(
             (line["end_seconds"] for line in transcript_lines), default=0
@@ -1859,3 +1897,118 @@ async def generate_post_texts(
             "description": _clean_post_text(texts.youtube_description, 4900),
         },
     }
+
+
+# --- Clip review and text adjustments ---------------------------------------
+# Adapted from SHARINGAN's reviewer and change requests (src/cortes/contexto.ts,
+# src/cortes/ajustar.ts; MIT licence, (c) 2026 the SHARINGAN authors).
+
+ReviewProblem = Literal["weak_hook", "missing_context", "dead_start", "cut_ending", "weak_title"]
+
+
+class ClipReview(BaseModel):
+    """The reviewer's verdict on one finished clip and the fixes it asks for."""
+
+    score: int = Field(description="1-10: how well the clip holds a viewer from the first to the last second")
+    problems: List[ReviewProblem] = Field(default_factory=list)
+    notes: str = Field(default="", description="One short sentence on the main problem, in the transcript's language")
+    start_time: Optional[str] = Field(default=None, description="New start (a line start shown), only for missing_context or dead_start")
+    end_time: Optional[str] = Field(default=None, description="New end (a line end shown), only for cut_ending")
+    hook_start_time: Optional[str] = Field(default=None, description="Start of the 2-5 s teaser line, only for weak_hook")
+    hook_end_time: Optional[str] = Field(default=None, description="End of the teaser line, only for weak_hook")
+    hook_title: Optional[str] = Field(default=None, description="Better on-screen title, only for weak_title")
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def clamp_score(cls, value: Any) -> int:
+        try:
+            return max(1, min(10, int(round(float(value)))))
+        except (TypeError, ValueError):
+            return 5
+
+    @field_validator("problems", mode="before")
+    @classmethod
+    def known_problems(cls, value: Any) -> List[str]:
+        allowed = set(ReviewProblem.__args__)  # type: ignore[attr-defined]
+        return [p for p in (value or []) if isinstance(p, str) and p in allowed]
+
+
+class ClipAdjustment(BaseModel):
+    """A clip changed to match the creator's request."""
+
+    start_time: str = Field(description="Clip start, a timestamp shown in the transcript")
+    end_time: str = Field(description="Clip end, a timestamp shown in the transcript")
+    hook_title: Optional[str] = Field(default=None, description="On-screen title (3-9 words)")
+    hook_start_time: Optional[str] = Field(default=None, description="Teaser start inside the clip, or null for none")
+    hook_end_time: Optional[str] = Field(default=None, description="Teaser end, or null")
+    reply: str = Field(description="One sentence for the creator saying what changed, in Brazilian Portuguese")
+
+
+clip_review_system_prompt = """You are the chief reviewer of vertical clips (Shorts, Reels, TikTok) cut from long videos and live streams.
+You read each finished clip like a viewer on the feed and fix what makes people scroll away. Check, in order:
+1. HOOK: do the first 3-5 seconds hold the peak (a shout, crazy action, a shocking line, a question that makes people curious)? A lukewarm opening is "weak_hook".
+2. CONTEXT: would someone who never saw the source understand what is happening and why? If not, "missing_context": start earlier, up to 15 s, at a line start shown in BEFORE THE CLIP.
+3. DEAD START: does it open with dead air, greetings, filler or setup nobody needs? Then "dead_start": start later, up to 8 s, at a line start inside the clip.
+4. ENDING: does it stop before the reaction, the answer or the payoff? Then "cut_ending": end later, up to 8 s, at a line end shown.
+5. TITLE: is the on-screen title faithful to the clip and does it make people want to watch? If it lies or is flat, "weak_title" and a better hook_title (3-9 words, the transcript's language, no hashtags or emojis).
+🔊 marks a volume peak (shouting, celebrating, a scare, a loud game moment); 🔊🔊 a very strong one.
+Score 1-10 for how well the clip holds from the first to the last second. Below 8 you MUST fix at least one thing.
+Only use timestamps that appear in the lines shown. Only point out what you can read. Return valid JSON only."""
+
+clip_adjust_system_prompt = """You edit clips cut from long videos and live streams.
+The creator saw a finished clip and asked for a change. Change only what they asked; keep everything else as it is.
+Use only timestamps that appear in the transcript shown. Clips must stay between 15 seconds and 3 minutes.
+The reply is one short sentence in Brazilian Portuguese telling the creator what you changed.
+Return valid JSON only."""
+
+_simple_agents: Dict[str, Any] = {}
+
+
+def _simple_agent(name: str, output_type: Any, system_prompt: str) -> Agent:
+    """A lazily built agent on the configured LLM, rebuilt when settings change."""
+    runtime_config = get_config()
+    provider, _ = _split_llm_name(runtime_config.llm)
+    signature = (
+        runtime_config.llm,
+        runtime_config.openai_api_key,
+        runtime_config.openai_base_url,
+        runtime_config.openrouter_api_key,
+        runtime_config.openrouter_fallback_model,
+        runtime_config.google_api_key,
+        runtime_config.anthropic_api_key,
+        runtime_config.ollama_base_url,
+        runtime_config.ollama_api_key,
+    )
+    cached = _simple_agents.get(name)
+    if cached and cached[0] == signature:
+        return cached[1]
+    apply_settings_to_process_env(runtime_config.as_runtime_settings())
+    config_error = _get_missing_llm_key_error(runtime_config.llm, runtime_config)
+    if config_error:
+        raise RuntimeError(config_error)
+    agent = Agent(
+        model=_build_transcript_model(runtime_config),
+        output_type=NativeOutput(output_type, strict=True) if provider == "openrouter" else output_type,
+        system_prompt=system_prompt,
+        output_retries=2,
+    )
+    _simple_agents[name] = (signature, agent)
+    return agent
+
+
+async def review_clip(prompt: str) -> ClipReview:
+    result = await _run_transcript_analysis(
+        _simple_agent("clip_review", ClipReview, clip_review_system_prompt),
+        prompt,
+        timeout_seconds=120,
+    )
+    return result.output
+
+
+async def adjust_clip(prompt: str) -> ClipAdjustment:
+    result = await _run_transcript_analysis(
+        _simple_agent("clip_adjust", ClipAdjustment, clip_adjust_system_prompt),
+        prompt,
+        timeout_seconds=120,
+    )
+    return result.output

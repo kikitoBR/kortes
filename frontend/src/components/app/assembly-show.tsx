@@ -1079,7 +1079,6 @@ export function AssemblyShow({ show, message, live = false }: { show: ShowState 
     let lastActive = -1;
     let lastCrew = "";
     let lastPlay = 0;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     const tick = () => {
       frame = requestAnimationFrame(tick);
       const current = clipRef.current;
@@ -1096,7 +1095,8 @@ export function AssemblyShow({ show, message, live = false }: { show: ShowState 
         const fresh = build.key !== current.key;
         // A new clip opened when already finished plays no build; a review re-render plays it again.
         build.stalePreview = fresh ? null : (current.preview ?? null);
-        build.skip = reduce || (fresh && current.stage === "pronto");
+        // The agents play even with "reduce motion" on: Windows turns it on with its animations off.
+        build.skip = fresh && current.stage === "pronto";
         build.signature = signature;
         build.key = current.key;
         build.cuts = null;
@@ -1176,7 +1176,7 @@ export function AssemblyShow({ show, message, live = false }: { show: ShowState 
 
       // The agents.
       let follow: number | null = null;
-      if (octx && wrap && current.stage !== "pronto" && !reduce) {
+      if (octx && wrap && current.stage !== "pronto") {
         follow = drawCrew(
           octx,
           {

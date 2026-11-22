@@ -70,6 +70,21 @@ def archive_covering(task_id: str, start: float, end: float) -> Optional[Tuple[P
     return None
 
 
+def archive_window(task_id: str, start: float, end: float) -> Optional[Tuple[float, float]]:
+    """The live-clock span kept for the clip around [start, end] (what edits can reach).
+
+    The archive that overlaps the clip the most, so bounds that already reach
+    past it (an edit asking for more) still find it.
+    """
+    directory = live_dir(task_id) / "archive"
+    best, best_overlap = None, 0.0
+    for entry in archive_entries(task_id):
+        overlap = min(end, entry["end"]) - max(start, entry["start"])
+        if overlap > best_overlap and (directory / entry["path"]).exists():
+            best, best_overlap = (float(entry["start"]), float(entry["end"])), overlap
+    return best
+
+
 class LiveClipSource:
     """ClipSource for a live task: times clips from the live's transcript cache
     and takes the picture from the archive file that covers them."""
@@ -88,6 +103,10 @@ class LiveClipSource:
                 f"ficam disponíveis para edição (por {get_config().live_archive_days} dias)."
             )
         return found
+
+    def window(self, start: float, end: float) -> Optional[Tuple[float, float]]:
+        """Only the minutes kept around the clip can be used by an edit."""
+        return archive_window(self.task_id, start, end)
 
     def release(self, render_source) -> None:
         """Archive files stay for later edits."""

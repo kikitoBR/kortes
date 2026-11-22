@@ -504,7 +504,13 @@ class ClipEditingMixin:
         """Change a ready clip from a plain request ("começa 3 s antes",
         "troca a headline") and render it again from the source."""
         from ..ai import adjust_clip
-        from ..clip_review import apply_adjustment, build_adjust_prompt, segment_from_clip
+        from ..clip_review import (
+            apply_adjustment,
+            build_adjust_prompt,
+            fit_to_window,
+            segment_bounds,
+            segment_from_clip,
+        )
         from ..media.voice_energy import energy_zscores, measure_voice_energy
 
         instructions = (instructions or "").strip()
@@ -523,12 +529,16 @@ class ClipEditingMixin:
         clip_source = await self._clip_source_for_task(task)
         try:
             timing_path = clip_source.timing_path
+            # A live keeps only the minutes around each clip: the edit must stay inside them.
+            window_of = getattr(clip_source, "window", None)
+            window = window_of(*segment_bounds(segment)) if window_of else None
             levels = await run_in_thread(measure_voice_energy, timing_path)
             prompt = build_adjust_prompt(
                 timing_path,
                 segment,
                 instructions,
                 voice_energy=energy_zscores(levels) if levels else None,
+                window=window,
             )
             try:
                 adjustment = await adjust_clip(prompt)
@@ -536,6 +546,7 @@ class ClipEditingMixin:
                 logger.warning("Clip adjustment request failed: %s", type(exc).__name__)
                 raise ValueError("A IA não respondeu agora. Tente de novo em instantes.") from exc
             adjusted = apply_adjustment(segment, adjustment)
+            window_note = fit_to_window(adjusted, window)
             output_dir = Path(self.config.temp_dir) / "clips"
             output_dir.mkdir(parents=True, exist_ok=True)
             info = await self.video_service.create_single_clip(
@@ -578,7 +589,12 @@ class ClipEditingMixin:
             await self.clip_repo.update_clip_hook_title(self.db, clip_id, adjusted.get("hook_title"))
         return {
             "clip": (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {},
-            "reply": (adjustment.reply or "").strip()[:300] or "Pronto, o clipe foi refeito.",
+            "reply": " ".join(
+                part for part in (
+                    (adjustment.reply or "").strip()[:300] or "Pronto, o clipe foi refeito.",
+                    window_note,
+                ) if part
+            ),
         }
 
     async def _regenerate_live_clips(

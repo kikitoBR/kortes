@@ -8,6 +8,7 @@ from src.clip_review import (
     apply_review,
     build_adjust_prompt,
     build_review_prompt,
+    fit_to_window,
     parse_label,
     segment_from_clip,
 )
@@ -132,3 +133,21 @@ def test_adjust_prompt_carries_the_request_and_nearby_lines(timing_path):
     prompt = build_adjust_prompt(timing_path, SEGMENT, "começa 3 s antes")
     assert 'CREATOR\'S REQUEST: "começa 3 s antes"' in prompt
     assert "roubou" in prompt and "kkkk" in prompt
+
+
+def test_a_live_edit_stays_inside_the_kept_minutes(timing_path):
+    # The live kept 09:40-10:50 around this clip.
+    prompt = build_adjust_prompt(timing_path, SEGMENT, "prolongue mais", window=(580.0, 650.0))
+    assert "AVAILABLE FOOTAGE: only 09:40 - 10:50 still exists" in prompt
+    adjusted = apply_adjustment(
+        SEGMENT, ClipAdjustment(start_time="09:56", end_time="12:01", hook_start_time="11:30", hook_end_time="11:33", reply="Estiquei.")
+    )
+    note = fit_to_window(adjusted, (580.0, 650.0))
+    assert (adjusted["start_time"], adjusted["end_time"]) == ("09:56", "10:50")
+    assert adjusted["hook_start_time"] is None  # the teaser was outside what is kept
+    assert note == "Dessa live só ficaram guardados 09:40–10:50, então não deu para ir além de 10:50."
+    inside = dict(SEGMENT)
+    assert fit_to_window(inside, (580.0, 650.0)) is None and inside["end_time"] == "10:40"
+    assert fit_to_window(dict(SEGMENT), None) is None
+    with pytest.raises(ValueError, match="só ficaram guardados"):
+        fit_to_window({**SEGMENT, "start_time": "11:00", "end_time": "11:40"}, (580.0, 665.0))

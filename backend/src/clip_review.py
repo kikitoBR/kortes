@@ -177,10 +177,24 @@ def build_adjust_prompt(
     instructions: str,
     *,
     voice_energy: Optional[Sequence[float]] = None,
+    window: Optional[Tuple[float, float]] = None,
 ) -> str:
+    """``window``: the only span of the source that still exists (a live keeps
+    just the minutes around each clip); the new bounds must stay inside it."""
     start, end = segment_bounds(segment)
-    nearby = transcript_excerpt(
-        video_path, max(0, start - ADJUST_CONTEXT_SECONDS), end + ADJUST_CONTEXT_SECONDS, voice_energy
+    near_start, near_end = max(0, start - ADJUST_CONTEXT_SECONDS), end + ADJUST_CONTEXT_SECONDS
+    if window:
+        near_start, near_end = max(near_start, window[0]), min(near_end, window[1])
+    nearby = transcript_excerpt(video_path, near_start, near_end, voice_energy)
+    limit = (
+        [
+            f"AVAILABLE FOOTAGE: only {label(window[0])} - {label(window[1])} still exists. "
+            "start_time, end_time and the teaser MUST stay inside it; if the request asks for more, "
+            "go as far as it allows and say so in the reply.",
+            "",
+        ]
+        if window
+        else []
     )
     teaser = (
         f'{segment.get("hook_start_time")} - {segment.get("hook_end_time")}'
@@ -195,6 +209,7 @@ def build_adjust_prompt(
             f'hook_title: "{segment.get("hook_title") or ""}"',
             f"teaser (plays first): {teaser}",
             "",
+            *limit,
             "TRANSCRIPT AROUND THE CLIP (🔊 = volume peak):",
             nearby or "(no transcript)",
             "",
@@ -230,6 +245,35 @@ def apply_adjustment(segment: Dict[str, Any], adjustment: ClipAdjustment) -> Dic
     else:
         adjusted["hook_start_time"] = adjusted["hook_end_time"] = None
     return adjusted
+
+
+def fit_to_window(adjusted: Dict[str, Any], window: Optional[Tuple[float, float]]) -> Optional[str]:
+    """Keep an adjusted segment inside the footage that exists, in place.
+
+    Returns a note for the creator when the request was cut short; raises
+    ValueError when too little is left.
+    """
+    if not window:
+        return None
+    start, end = segment_bounds(adjusted)
+    low, high = window
+    fitted_start, fitted_end = max(start, low), min(end, high)
+    if (fitted_start, fitted_end) == (start, end):
+        return None
+    if fitted_end - fitted_start < MIN_CLIP_SECONDS:
+        raise ValueError(
+            f"Dessa live só ficaram guardados {label(low)}–{label(high)}, e o pedido sai desse trecho."
+        )
+    adjusted["start_time"], adjusted["end_time"] = label(fitted_start), label(fitted_end)
+    hook_start, hook_end = parse_label(adjusted.get("hook_start_time")), parse_label(adjusted.get("hook_end_time"))
+    if hook_start is not None and hook_end is not None and not fitted_start <= hook_start < hook_end <= fitted_end:
+        adjusted["hook_start_time"] = adjusted["hook_end_time"] = None
+    parts = []
+    if fitted_start > start:
+        parts.append(f"começar antes de {label(low)}")
+    if fitted_end < end:
+        parts.append(f"ir além de {label(high)}")
+    return f"Dessa live só ficaram guardados {label(low)}–{label(high)}, então não deu para {' nem '.join(parts)}."
 
 
 def segment_from_clip(clip: Dict[str, Any], keep_ranges: Sequence[Tuple[float, float]]) -> Dict[str, Any]:

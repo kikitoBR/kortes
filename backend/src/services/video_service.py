@@ -361,6 +361,15 @@ class VideoService:
                     cleanup_settings,
                 )
             keep_ranges = extend_keep_ranges_to_sentence_boundary(video_path, keep_ranges)
+            window_of = getattr(clip_source, "window", None) if clip_source is not None else None
+            window = window_of(*source_range_bounds(keep_ranges)) if window_of and keep_ranges else None
+            if window:
+                # A live keeps only the minutes around each clip: snapping must not reach past them.
+                keep_ranges = [
+                    (max(a, window[0]), min(b, window[1]))
+                    for a, b in keep_ranges
+                    if min(b, window[1]) - max(a, window[0]) > 0.05
+                ]
             clip_text = segment.get("text", "")
             if not provided_keep_ranges and not source_ranges:
                 keep_ranges = apply_segment_hook_teaser(

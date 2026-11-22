@@ -207,6 +207,22 @@ def test_live_links_and_archive_expiry(config, tmp_path):
     assert not folder.exists() and running.exists()
 
 
+def test_edits_reach_only_the_minutes_kept_around_a_clip(config):
+    from src.live.archive import LiveClipSource, add_archive_entry
+
+    archive = live_dir("task-win") / "archive"
+    archive.mkdir(parents=True)
+    for name in ("clip-001.mkv", "clip-002.mkv"):
+        (archive / name).write_bytes(b"x")
+    add_archive_entry("task-win", archive / "clip-001.mkv", 130.0, 205.0)
+    add_archive_entry("task-win", archive / "clip-002.mkv", 400.0, 470.0)
+    source = LiveClipSource("task-win")
+    assert source.window(150, 195) == (130.0, 205.0)
+    # An edit already reaching past the kept minutes still finds them.
+    assert source.window(146, 241) == (130.0, 205.0)
+    assert source.window(300, 350) is None
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
 @pytest.mark.asyncio
 async def test_stop_ends_the_recording_and_keeps_what_was_heard(config, stream_file):

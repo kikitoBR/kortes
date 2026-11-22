@@ -135,7 +135,9 @@ and enqueues `watch_live` on the `supoclip_live` queue, served by the `live-work
 
 ### Database
 
-PostgreSQL 15. Schema in `init.sql`. Mixed naming conventions:
+PostgreSQL 15. Schema in `init.sql` plus the backend's migrations (`backend/src/migrations/sql`, applied by
+`init_db` at API startup). The frontend never changes the schema: no `prisma db push` (it dropped every
+backend table missing from `schema.prisma`). Mixed naming conventions:
 - `tasks`, `sources`, `generated_clips` → snake_case
 - `session`, `account`, `verification`, `users` → camelCase (Better Auth)
 - UUIDs stored as VARCHAR(36)

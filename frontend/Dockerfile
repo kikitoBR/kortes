@@ -44,8 +44,11 @@ ENV HOSTNAME="0.0.0.0"
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Start development server with hot-reload
-# Run prisma generate first to handle volume mount scenarios where node_modules is overwritten
-CMD ["sh", "-c", "pnpm exec prisma generate && pnpm exec prisma db push --accept-data-loss && pnpm run dev"]
+# Run prisma generate first to handle volume mount scenarios where node_modules is overwritten.
+# No `prisma db push`: the schema belongs to init.sql and the backend's migrations (as in
+# production), and `db push --accept-data-loss` dropped every backend table missing from
+# schema.prisma (generated_clips, media_deletions, schema_migrations, ...).
+CMD ["sh", "-c", "pnpm exec prisma generate && pnpm run dev"]
 
 # Builder stage (for production)
 FROM base AS builder

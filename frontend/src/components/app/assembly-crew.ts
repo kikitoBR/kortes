@@ -21,7 +21,8 @@ export const AGENTS: { id: AgentId; name: string; color: string }[] = [
 
 export const agentColor = (id: AgentId) => AGENTS.find((a) => a.id === id)!.color;
 
-const STAGE_ORDER = ["momento", "cortes", "trecho", "enquadramento", "render", "revisao", "pronto"] as const;
+// The review reads the moment before it is cut and rendered.
+const STAGE_ORDER = ["momento", "revisao", "cortes", "trecho", "enquadramento", "render", "pronto"] as const;
 export type CrewStage = (typeof STAGE_ORDER)[number];
 const at = (stage: CrewStage) => STAGE_ORDER.indexOf(stage);
 
@@ -116,6 +117,7 @@ export function crewStatus(input: CrewInput): Record<AgentId, CrewMember> {
 
   let diretor: CrewMember;
   if (stage === at("momento")) diretor = working("escolhendo o momento");
+  else if (stage === at("revisao")) diretor = idle("esperando o Revisor");
   else if (c === null) diretor = working("separando os pedaços");
   else if (c < cuts.blocksEnd && input.blocks) {
     const i = Math.max(0, currentStep(cuts.blocks.map((b) => b.start), c));
@@ -158,14 +160,13 @@ export function crewStatus(input: CrewInput): Record<AgentId, CrewMember> {
 
   const review = input.review;
   const verdict = review
-    ? `nota ${review.score}/10 · ${review.changes.length ? review.changes[0] : "aprovado"}`
+    ? done(`nota ${review.score}/10 · ${review.changes.length ? review.changes[0] : "aprovado"}`)
     : null;
   let revisor: CrewMember;
-  if (stage === at("pronto")) revisor = done(review ? `nota ${review.score}/10 · ${review.changes.length ? "ajustes feitos" : "aprovado"}` : "liberado");
-  else if (stage === at("revisao")) revisor = review ? done(verdict!) : working("assistindo o corte");
-  // Asked for fixes: the clip is being made again with them.
-  else if (review?.changes.length) revisor = working(`pediu: ${review.changes[0]}`);
-  else revisor = idle("esperando o render");
+  if (stage < at("revisao")) revisor = idle("esperando o momento");
+  else if (verdict) revisor = verdict;
+  else if (stage === at("revisao")) revisor = working("lendo o momento, o antes e o depois");
+  else revisor = stage === at("pronto") ? done("liberado") : idle("sem revisão");
 
   return { diretor, legendista, camera, montador, revisor };
 }

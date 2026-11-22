@@ -84,7 +84,8 @@ export interface ShowState {
   queue: ShowQueueItem[];
 }
 
-const STAGE_IDS: ShowStage[] = ["momento", "cortes", "trecho", "enquadramento", "render", "revisao", "pronto"];
+// The review reads the moment before it is cut and rendered.
+const STAGE_IDS: ShowStage[] = ["momento", "revisao", "cortes", "trecho", "enquadramento", "render", "pronto"];
 const STORAGE_KEY = "kortes-show-open";
 const CAM_SHARE = 768 / 1920;
 const WEBCAM_LAYOUTS = new Set(["vertical_gameplay", "vertical_gameplay_bottom", "vertical_cam_float"]);
@@ -573,7 +574,7 @@ function drawCrew(ctx: CanvasRenderingContext2D, el: Elements, s: Scene): number
   const at = (id: Parameters<typeof stageIndex>[0]) => stageIndex(id);
 
   // Diretor: picks the moment, then drags each piece of the original onto the video track.
-  if (S && (stage === at("momento") || (cuts === null && stage <= at("cortes")))) {
+  if (S && (stage === at("momento") || (cuts === null && stage === at("cortes")))) {
     const y = videoTrack ? videoTrack.y + videoTrack.h / 2 : S.y + S.h / 2;
     drawCursor(ctx, S.x + S.w * (0.2 + 0.6 * (0.5 + 0.5 * Math.sin(now * 1.6))), y, pi("diretor"), "Diretor");
   } else if (S && videoTrack && cuts !== null && cuts < cp.blocksEnd) {
@@ -717,7 +718,7 @@ function drawCrew(ctx: CanvasRenderingContext2D, el: Elements, s: Scene): number
     drawCursor(ctx, clampX(x), videoTrack.y + videoTrack.h * 0.55, pi("montador"), "Montador");
   }
 
-  // Revisor: watches the hook, the title and the ending; then gives a verdict.
+  // Revisor: reads the start, the title and the ending of the moment; then gives a verdict.
   if (stage === at("revisao") && S && P) {
     const review = s.clip.review;
     if (review) {
@@ -725,11 +726,11 @@ function drawCrew(ctx: CanvasRenderingContext2D, el: Elements, s: Scene): number
       drawPill(ctx, P.x + P.w / 2, P.y + P.h * 0.32, verdict, pi("revisor"));
       drawCursor(ctx, P.x + P.w / 2 + 30, P.y + P.h * 0.32 + 8, pi("revisor"), "Revisor");
     } else {
-      const duration = s.clip.duration ?? 0;
+      const y = S.y + S.h / 2;
       const points = [
-        { x: clampX(contentX(0.6)), y: (videoTrack ?? S).y + (videoTrack ?? S).h / 2, label: "gancho" },
+        { x: S.x + S.w * 0.12, y, label: "começo" },
         { x: P.x + P.w / 2, y: P.y + P.h * 0.12, label: "título" },
-        { x: clampX(contentX(Math.max(0, duration - 0.8))), y: (captionTrack ?? S).y + (captionTrack ?? S).h / 2, label: "final" },
+        { x: S.x + S.w * 0.85, y, label: "final" },
       ];
       const slot = Math.floor(now / 1.6) % points.length;
       const prev = points[(slot + points.length - 1) % points.length];

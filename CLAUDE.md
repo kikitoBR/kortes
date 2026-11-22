@@ -92,7 +92,7 @@ utils/               → Thread pool helpers for blocking operations (async_help
    - Optional transition effects (`backend/transitions/`)
    - Optional B-roll overlays (Pexels API)
    - Caption templates with animation styles
-5. **Review** → `CLIP_REVIEW_ENABLED` (default on): one AI call per rendered clip (`ai.review_clip`, rules in `clip_review.py`, from SHARINGAN) reads the transcript before/inside/after with peaks; weak hook → new teaser, missing context → start up to 15 s earlier, dead start → up to 8 s later, cut ending → up to 8 s later, weak title → new `hook_title`. Fixes re-render the clip once before it is saved; any failure keeps the first render. Audio is levelled to -14 LUFS in two passes (`loudnorm_filter_for`)
+5. **Review** → `CLIP_REVIEW_ENABLED` (default on): one AI call per clip (`ai.review_clip`, rules in `clip_review.py`, from SHARINGAN) reads the transcript before/inside/after with peaks; weak hook → new teaser, missing context → start up to 15 s earlier, dead start → up to 8 s later, cut ending → up to 8 s later, weak title → new `hook_title`. It reads only the transcript, so it runs **before** the render (`TaskService._review_segment`, also in the live worker) and its fixes go into the one render; any failure keeps the chosen moment. Audio is levelled to -14 LUFS in two passes (`loudnorm_filter_for`). The final encode is libx264 `veryfast` CRF 18 (`FINAL_VIDEO_PRESET`/`FINAL_VIDEO_CRF` in `media/common.py`): measured equal to the old `medium` CRF 19 in about half the time
 6. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL. Each clip is saved and pushed to the page (SSE `clip_ready`) as soon as it renders; a failed clip is skipped and counted in the progress line. A rerun of the same task (worker restart, "Retomar") keeps clips already rendered for the same moments (`reusable_clip_ids` in `task_service.py`)
 
 ### Live clipping (`src/live/`, `workers/live.py`)
@@ -250,7 +250,7 @@ RERANK_LLM=                          # Optional; model for the long-video candid
 YOUTUBE_DOWNLOAD_PROVIDER=yt_dlp     # yt_dlp | apify
 YOUTUBE_PARTIAL_DOWNLOAD=true        # Long videos: audio first, then each clip's section only
 YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS=1200
-CLIP_REVIEW_ENABLED=true             # One AI review (and possible re-render) per clip
+CLIP_REVIEW_ENABLED=true             # One AI review per clip, before it is rendered
 EDITOR_PREFETCH_CLIPS=2              # Clips after the opened one prepared ahead for the editor (0 = off)
 LIVE_CLIPPING_ENABLED=true           # Live links are recorded and clipped while they stream
 LIVE_MAX_CONCURRENT=2                # Lives recorded at once (live-worker max_jobs)
@@ -325,16 +325,16 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
 - "Ajustar com IA": `POST /tasks/{id}/clips/{clip_id}/adjust` `{"instructions": "começa 3 s antes"}` → `ai.adjust_clip` returns new bounds/title/teaser (validated in `clip_review.apply_adjustment`, 15 s-3 min) and the clip is rendered again from the source (`ClipEditingMixin.adjust_clip_with_text`)
 - Assembly show ("Bastidores", `components/app/assembly-show.tsx`): the clip really being made, like an editor. The
   render reports each stage through `ShowReporter` (`src/show.py`; Redis `show:{task}` + SSE `show`, read on page
-  load from `GET /tasks/{id}/show`): `momento` → `cortes` (ranges, teaser count, timed words, `words_per_line` from the
+  load from `GET /tasks/{id}/show`): `momento` → `revisao` (the review's `{score, changes, notes}`) → `cortes` (ranges, teaser count, timed words, `words_per_line` from the
   caption template) → `trecho` (section download) → `enquadramento` (a 480p silent preview of the real cut and a
   filmstrip, served by `GET /tasks/{id}/show/{clip_key}/{preview.mp4|strip.jpg}`, plus the webcam/game regions) →
-  `render` → `revisao` (the review's `{score, changes, notes}`) → `pronto` (the saved clip), with the task's queue of
+  `render` → `pronto` (the saved clip), with the task's queue of
   moments. The page draws the preview in a phone with the layout, title and captions, a timeline (title, filmstrip +
   source pieces, caption lines) that follows the playhead, and a source monitor with the crops. A crew of agents
   (`assembly-crew.ts`: Diretor, Legendista, Câmera, Montador, Revisor) builds it on an overlay canvas as each step
   arrives: cursors drag the pieces onto the video track, type the title and drop the caption lines, crop the
-  webcam/game on the source and fly each crop into its slot on the phone; each agent's card says what it is doing. A
-  review re-render (new ranges, versioned preview URL) plays the build again. The preview `<video>` must stay laid out
+  webcam/game on the source and fly each crop into its slot on the phone; each agent's card says what it is doing. New
+  ranges for the same clip (versioned preview URL) play the build again. The preview `<video>` must stay laid out
   (Chrome never autoplays a `display:none` video). Files live in `TEMP_DIR/show/<task>` until the next clip/task end.
 - Editor preparation (`prepare_editor`) re-renders each clip's source minutes once (`clean.mp4`, the export master) plus
   thumbnails, waveform and the gameplay framing. Opening a clip also prepares the next `EDITOR_PREFETCH_CLIPS`

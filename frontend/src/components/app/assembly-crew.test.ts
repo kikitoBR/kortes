@@ -70,10 +70,13 @@ describe("crewStatus", () => {
     const rendering = crewStatus({ ...base, stage: "render", cuts: 99, frame: 99, webcam: "webcam em 77%, 45%" });
     expect(rendering.camera).toEqual({ state: "done", text: "webcam em 77%, 45%" });
     expect(rendering.montador).toEqual({ state: "working", text: "renderizando 42 s em 1080×1920" });
-    const watching = crewStatus({ ...base, stage: "revisao", cuts: 99, frame: 99 });
-    expect(watching.revisor).toEqual({ state: "working", text: "assistindo o corte" });
-    const fixing = crewStatus({ ...base, stage: "cortes", cuts: 0, review: { score: 5, changes: ["começa 3 s antes para dar contexto"] } });
-    expect(fixing.revisor).toEqual({ state: "working", text: "pediu: começa 3 s antes para dar contexto" });
+    // The review reads the moment before it is cut.
+    const reading = crewStatus({ ...base, stage: "revisao" });
+    expect(reading.revisor).toEqual({ state: "working", text: "lendo o momento, o antes e o depois" });
+    expect(reading.diretor).toEqual({ state: "idle", text: "esperando o Revisor" });
+    expect(reading.camera.state).toBe("idle");
+    const fixed = crewStatus({ ...base, stage: "cortes", cuts: 0, review: { score: 5, changes: ["começa 3 s antes para dar contexto"] } });
+    expect(fixed.revisor).toEqual({ state: "done", text: "nota 5/10 · começa 3 s antes para dar contexto" });
     const done = crewStatus({ ...base, stage: "pronto", cuts: 99, frame: 99, review: { score: 8, changes: [] } });
     expect(Object.values(done).every((m) => m.state === "done")).toBe(true);
     expect(done.revisor.text).toBe("nota 8/10 · aprovado");

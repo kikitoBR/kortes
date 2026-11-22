@@ -506,8 +506,7 @@ def reviewed_service(monkeypatch, review):
     service.video_service.process_video_complete.return_value["segments_to_render"] = [
         {"start_time": "00:30", "end_time": "01:10", "hook_title": "Título"}
     ]
-    fixed = {**build_clip_result(), "path": "/tmp/clip-1-fixed.mp4", "end_time": "01:16"}
-    service.video_service.create_single_clip = AsyncMock(side_effect=[build_clip_result(), fixed])
+    service.video_service.create_single_clip = AsyncMock(return_value=build_clip_result())
     monkeypatch.setattr(task_service_module, "measure_voice_energy", lambda _path: [])
     reviewer = AsyncMock(
         side_effect=review if isinstance(review, Exception) else None,
@@ -518,21 +517,21 @@ def reviewed_service(monkeypatch, review):
 
 
 @pytest.mark.asyncio
-async def test_review_fixes_are_rendered_before_the_clip_is_saved(monkeypatch):
+async def test_review_fixes_go_into_the_only_render(monkeypatch):
     service, reviewer = reviewed_service(
         monkeypatch, {"score": 5, "problems": ["cut_ending"], "end_time": "01:16"}
     )
     await service.process_task(task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube")
 
     reviewer.assert_awaited_once()
-    assert service.video_service.create_single_clip.await_count == 2
-    fixed_segment = service.video_service.create_single_clip.await_args_list[1].args[1]
-    assert fixed_segment["end_time"] == "01:16"
+    # Reviewed before rendering: one render, already with the fix.
+    assert service.video_service.create_single_clip.await_count == 1
+    rendered_segment = service.video_service.create_single_clip.await_args.args[1]
+    assert rendered_segment["end_time"] == "01:16"
     saved = service.clip_repo.create_clip.await_args.kwargs
-    assert saved["file_path"] == "/tmp/clip-1-fixed.mp4"
     assert "Revisão: termina 6 s depois" in saved["reasoning"]
     messages = [c.kwargs.get("progress_message") for c in service.task_repo.update_task_status.await_args_list]
-    assert "Revisando o clipe 1 de 1..." in messages
+    assert messages.index("Revisando o clipe 1 de 1...") < messages.index("Criando o clipe 1 de 1...")
 
 
 @pytest.mark.asyncio
@@ -548,16 +547,11 @@ async def test_the_review_tells_the_show_what_it_found(monkeypatch, review, chan
     service, _ = reviewed_service(monkeypatch, review)
     monkeypatch.setattr(task_service_module, "build_review_prompt", lambda *a, **k: "prompt")
     show = SimpleNamespace(clip=AsyncMock())
-    await service._review_rendered_clip(
+    segment, note = await service._review_segment(
         Path("/tmp/video.mp4"),
         {"start_time": "00:30", "end_time": "01:10", "hook_title": "Título"},
-        build_clip_result(),
         0,
-        Path("/tmp"),
-        render_options=(None, None, None, "default", "vertical", True, None),
-        webcam_region=None,
         hook_intro=None,
-        clip_source=None,
         voice_energy=[],
         show=show,
     )
@@ -565,16 +559,20 @@ async def test_the_review_tells_the_show_what_it_found(monkeypatch, review, chan
     assert reported["score"] == review["score"]
     assert reported["changes"] == changes
     assert reported["notes"] == review.get("notes", "")
+    assert (note is not None) == bool(changes)
+    assert segment["end_time"] == ("01:16" if changes else "01:10")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("review", [{"score": 9}, RuntimeError("model down")])
-async def test_a_passing_or_failed_review_keeps_the_first_render(monkeypatch, review):
+async def test_a_passing_or_failed_review_renders_the_chosen_moment(monkeypatch, review):
     service, _ = reviewed_service(monkeypatch, review)
     await service.process_task(task_id="task-1", url="https://www.youtube.com/watch?v=demo", source_type="youtube")
 
     assert service.video_service.create_single_clip.await_count == 1
+    assert service.video_service.create_single_clip.await_args.args[1]["end_time"] == "01:10"
     assert service.clip_repo.create_clip.await_args.kwargs["file_path"] == "/tmp/clip-1.mp4"
+    assert "Revisão" not in (service.clip_repo.create_clip.await_args.kwargs["reasoning"] or "")
 
 
 @pytest.mark.asyncio

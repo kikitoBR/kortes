@@ -81,7 +81,7 @@ class ProductionLiveHooks:
     async def render(self, segment, index, webcam_region, voice_energy):
         from ..clip_cleanup import normalize_clip_cleanup_settings
         from ..live.archive import LiveClipSource, timing_path
-        from ..services.task_service import TaskService
+        from ..services.task_service import TaskService, add_review_note
         from ..services.video_service import VideoService
 
         config = get_config()
@@ -98,19 +98,20 @@ class ProductionLiveHooks:
             self.options.add_subtitles,
             normalize_clip_cleanup_settings(**(self.options.cleanup_settings or {})),
         )
+        # The review reads only the transcript, so its fixes go into the one render.
+        note = None
+        if config.clip_review_enabled:
+            await self.show.clip(stage="revisao")
+            segment, note = await TaskService(db=None)._review_segment(
+                timing, segment, index,
+                hook_intro=self.options.hook_intro, voice_energy=voice_energy, show=self.show,
+            )
         info = await VideoService.create_single_clip(
             timing, segment, index, output_dir, *render_options,
             webcam_region=webcam_region, hook_intro=self.options.hook_intro, clip_source=clip_source,
             show=self.show,
         )
-        if info and config.clip_review_enabled:
-            await self.show.clip(stage="revisao")
-            info = await TaskService(db=None)._review_rendered_clip(
-                timing, segment, info, index, output_dir,
-                render_options=render_options, webcam_region=webcam_region,
-                hook_intro=self.options.hook_intro, clip_source=clip_source, voice_energy=voice_energy,
-                show=self.show,
-            )
+        add_review_note(info, note)
         return info
 
     async def clip_started(self, index: int, segment: Dict[str, Any]) -> None:

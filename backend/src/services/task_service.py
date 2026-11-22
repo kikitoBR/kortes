@@ -3,7 +3,7 @@ Task service - orchestrates task creation and processing workflow.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -73,6 +73,13 @@ def clip_progress_message(index: int, total: int, failed: int) -> str:
     elif failed > 1:
         message += f" {failed} falharam e foram pulados."
     return message
+
+
+def add_review_note(clip_info: Optional[Dict[str, Any]], note: Optional[str]) -> None:
+    """What the review changed goes into the clip's reasoning."""
+    if clip_info is not None and note:
+        reasoning = clip_info.get("reasoning") or ""
+        clip_info["reasoning"] = f"{reasoning}\n{note}" if reasoning else note
 
 
 def clip_review_message(index: int, total: int) -> str:
@@ -167,24 +174,22 @@ class TaskService(ClipEditingMixin):
         )
         return (now - updated_at).total_seconds()
 
-    async def _review_rendered_clip(
+    async def _review_segment(
         self,
         video_path: Path,
         segment: Dict[str, Any],
-        clip_info: Dict[str, Any],
         index: int,
-        output_dir: Path,
         *,
-        render_options: tuple,
-        webcam_region: Optional[Dict[str, float]],
         hook_intro: Optional[bool],
-        clip_source: Optional[ClipSource],
         voice_energy: Optional[List[float]] = None,
         show: Optional[Any] = None,
-    ) -> Dict[str, Any]:
-        """One AI review of a finished clip; renders it again with the fixes.
+    ) -> Tuple[Dict[str, Any], Optional[str]]:
+        """One AI review of the chosen moment, before it is rendered.
 
-        Any failure keeps the clip as first rendered: the review only improves.
+        It reads the source transcript before, inside and after the moment
+        (never the rendered picture), so its fixes go into the only render.
+        Returns the segment to render and a note for the clip's reasoning; any
+        failure keeps the segment as chosen.
         """
         teaser_available = (
             self.config.hook_first_teaser if hook_intro is None else hook_intro
@@ -202,51 +207,23 @@ class TaskService(ClipEditingMixin):
             review = await review_clip(prompt)
         except Exception as exc:
             logger.warning("Review of clip %d skipped: %s", index + 1, type(exc).__name__)
-            return clip_info
+            return segment, None
         logger.info(
             "Clip %d review: score %d, problems %s", index + 1, review.score, review.problems
         )
         outcome = apply_review(segment, review, teaser_available=teaser_available)
         if show is not None:
-            # The page's Revisor says what it found (kept through a re-render).
+            # The page's Revisor says what it found.
             await show.clip(review={
                 "score": review.score,
                 "changes": outcome[1] if outcome else [],
                 "notes": (review.notes or "")[:200],
             })
         if not outcome:
-            return clip_info
+            return segment, None
         fixed_segment, changes = outcome
-        fixed = await self.video_service.create_single_clip(
-            video_path,
-            fixed_segment,
-            index,
-            output_dir,
-            *render_options,
-            webcam_region=webcam_region,
-            hook_intro=hook_intro,
-            clip_source=clip_source,
-            show=show,
-        )
-        if not fixed:
-            logger.warning("Clip %d: render with the review fixes failed; keeping the first", index + 1)
-            return clip_info
-        self._discard_rendered_clip(Path(clip_info["path"]))
-        note = "Revisão: " + "; ".join(changes) + "."
-        fixed["reasoning"] = "\n".join(
-            part for part in (fixed.get("reasoning") or "", note) if part
-        )
         logger.info("Clip %d fixed by the review: %s", index + 1, "; ".join(changes))
-        return fixed
-
-    def _discard_rendered_clip(self, path: Path) -> None:
-        clips_dir = (Path(self.config.temp_dir) / "clips").resolve()
-        try:
-            if path.resolve().is_relative_to(clips_dir):
-                path.unlink(missing_ok=True)
-                path.with_suffix(".source_map.json").unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Could not remove replaced clip %s", path)
+        return fixed_segment, "Revisão: " + "; ".join(changes) + "."
 
     @staticmethod
     def _cacheable_video_path(url: str, result: Dict[str, Any]) -> Optional[str]:
@@ -601,13 +578,29 @@ class TaskService(ClipEditingMixin):
                 clip_progress = 70 + int(
                     ((i + 1) / total_clips) * 25
                 ) if total_clips > 0 else 95
+                if show is not None:
+                    await show_status(i, "montando")
+                    await show.start_clip(i, total_clips, segment, output_format)
+                # The review reads only the transcript around the moment, so it
+                # runs before the render and its fixes go into the one render.
+                review_note = None
+                if self.config.clip_review_enabled:
+                    await update_progress(clip_progress, clip_review_message(i, total_clips))
+                    if show is not None:
+                        await show.clip(stage="revisao")
+                    segment, review_note = await self._review_segment(
+                        video_path,
+                        segment,
+                        i,
+                        hook_intro=hook_intro,
+                        voice_energy=result.get("voice_energy"),
+                        show=show,
+                    )
+                    await check_cancelled()
                 await update_progress(
                     clip_progress,
                     clip_progress_message(i, total_clips, failed_clips),
                 )
-                if show is not None:
-                    await show_status(i, "montando")
-                    await show.start_clip(i, total_clips, segment, output_format)
 
                 # Render single clip in thread pool
                 clip_info = await self.video_service.create_single_clip(
@@ -629,33 +622,7 @@ class TaskService(ClipEditingMixin):
                 )
                 pending_clip_path = Path(clip_info["path"]) if clip_info else None
                 await check_cancelled()
-                if clip_info is not None and self.config.clip_review_enabled:
-                    await update_progress(clip_progress, clip_review_message(i, total_clips))
-                    if show is not None:
-                        await show.clip(stage="revisao")
-                    clip_info = await self._review_rendered_clip(
-                        video_path,
-                        segment,
-                        clip_info,
-                        i,
-                        clips_output_dir,
-                        render_options=(
-                            font_family,
-                            font_size,
-                            font_color,
-                            caption_template,
-                            output_format,
-                            add_subtitles,
-                            normalized_cleanup_settings,
-                        ),
-                        webcam_region=webcam_region,
-                        hook_intro=hook_intro,
-                        clip_source=clip_source,
-                        voice_energy=result.get("voice_energy"),
-                        show=show,
-                    )
-                    pending_clip_path = Path(clip_info["path"])
-                    await check_cancelled()
+                add_review_note(clip_info, review_note)
                 if clip_info is None:
                     await show_status(i, "falhou")
                     failed_clips += 1

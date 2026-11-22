@@ -3,12 +3,12 @@
 While a clip renders, its state is published (Redis key + SSE "show" event):
 
   momento        the moment the AI picked (times, title)
+  revisao        the AI review of the moment, before it is cut (score, fixes)
   cortes         the cuts (teaser and body ranges) and every word with its time
   trecho         the minutes of the source being downloaded
   enquadramento  a light preview of the real cut (and a filmstrip of its frames)
                  plus where the webcam and the game were found in it
   render         the final encode (layout, captions, title, loudness)
-  revisao        the AI review
   pronto         the finished clip
 
 The state is kept so a page opened mid-render shows the clip being made and

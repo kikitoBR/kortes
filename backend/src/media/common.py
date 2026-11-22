@@ -166,9 +166,12 @@ ANALYSIS_UTTERANCE_SPLIT_THRESHOLD_WORDS = 80
 
 _WHISPER_MODEL_CACHE: Dict[str, Any] = {}
 
-FINAL_VIDEO_CRF = 19
+# veryfast at CRF 18 measured as the old medium at CRF 19 (SSIM 0.9876 vs 0.9878,
+# PSNR 37.85 vs 37.89 dB on a 1080x1920 60 fps gameplay clip, similar size) in
+# about half the encode time.
+FINAL_VIDEO_CRF = 18
 
-FINAL_VIDEO_PRESET = "medium"
+FINAL_VIDEO_PRESET = "veryfast"
 
 INTERMEDIATE_CRF = 16
 

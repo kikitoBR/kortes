@@ -151,3 +151,29 @@ def test_rendering_from_a_section_matches_the_whole_source(served, tmp_path, kee
     # Same picture and the same sound at the same moment, to the frame.
     assert first_flash(from_section) == pytest.approx(first_flash(from_whole), abs=0.02)
     assert first_beep(from_section) == pytest.approx(first_beep(from_whole), abs=0.02)
+
+
+def test_sections_prefer_plain_https_files_over_hls_copies():
+    from src.youtube_sections import section_format_selector
+
+    first = section_format_selector().split("/")[0]
+    # A finished live lists HLS copies yt-dlp ranks higher; the https mp4 comes first.
+    assert "[protocol=https]" in first and "[ext=mp4]" in first
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
+def test_a_cut_with_no_picture_is_a_failure(tmp_path, monkeypatch):
+    import src.youtube_sections as sections
+
+    def ffmpeg_dropping_every_frame(args, timeout=900):
+        # What ffmpeg did on a sliced VP9 HLS copy: audio only, exit code 0.
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=2",
+                        "-c:a", "aac", args[-1]], check=True)
+
+    monkeypatch.setattr(sections, "_ffmpeg", ffmpeg_dropping_every_frame)
+    info = {"requested_formats": [
+        {"url": "https://example.test/v.m3u8", "vcodec": "vp09", "acodec": "none"},
+        {"url": "https://example.test/a.m4a", "vcodec": "none", "acodec": "mp4a"},
+    ]}
+    with pytest.raises(sections.SectionDownloadError, match="no picture"):
+        sections._exact_cut(info, (10.0, 20.0), tmp_path / "cut.mkv")

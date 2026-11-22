@@ -59,9 +59,14 @@ def _format_limits() -> str:
 
 
 def section_format_selector() -> str:
-    # mp4/m4a: the fast path needs the sidx index those containers carry.
+    # mp4/m4a over plain https: the fast path needs the sidx index those files
+    # carry. A finished live also lists HLS copies ("m3u8", often VP9 sliced
+    # from WebM) that yt-dlp ranks higher; ffmpeg cannot seek into those (the
+    # cut came out with no picture), so they are only a last resort.
     limits = _format_limits()
     return (
+        f"bestvideo[ext=mp4][protocol=https]{limits}+bestaudio[ext=m4a][protocol=https]/"
+        f"bestvideo[protocol=https]{limits}+bestaudio[protocol=https]/"
         f"bestvideo[ext=mp4]{limits}+bestaudio[ext=m4a]/"
         f"bestvideo*{limits}+bestaudio/best{limits}"
     )
@@ -322,7 +327,23 @@ def _exact_cut(info: Dict[str, Any], window: Tuple[float, float], output: Path) 
          str(output)],
         timeout=1800,
     )
+    # ffmpeg can "succeed" with no picture at all (it dropped every frame while
+    # seeking a stream it cannot seek): that is a failed cut, not a section.
+    if not _has_video_frames(output):
+        raise SectionDownloadError("the cut has no picture")
     return window[0]
+
+
+def _has_video_frames(path: Path) -> bool:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
+         "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, timeout=120,
+    )
+    try:
+        return int((result.stdout or "0").strip().splitlines()[0]) > 0
+    except (ValueError, IndexError):
+        return False
 
 
 def download_youtube_section(

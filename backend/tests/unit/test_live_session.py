@@ -274,3 +274,37 @@ async def test_stop_now_drops_the_queue_and_says_so(config, tmp_path):
     await session.renders.put(None)
     await session.render_loop()
     assert record["status"] == "cancelled" and not hooks.rendered
+
+
+def test_pieces_keep_one_clock_past_the_mpegts_wrap():
+    from src.live.session import PTS_WRAP_SECONDS, unwrap_piece_times
+
+    start, audio, wrap = unwrap_piece_times(95400.0, 95401.5, None, 0.0)
+    assert (start, audio, wrap) == (95400.0, 95401.5, 0.0)
+    # The next piece rolled over: it still comes 30 s later.
+    start, audio, wrap = unwrap_piece_times(95430.0 - PTS_WRAP_SECONDS, 95431.5 - PTS_WRAP_SECONDS, 95400.0, wrap)
+    assert round(start, 3) == 95430.0 and round(audio, 3) == 95431.5 and wrap == PTS_WRAP_SECONDS
+    # Picture just before the wrap, voice just after it.
+    start, audio, _ = unwrap_piece_times(95443.0, 0.5, 95400.0, 0.0)
+    assert round(audio - start, 3) == round(0.5 + PTS_WRAP_SECONDS - 95443.0, 3)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
+def test_separate_video_and_audio_streams_stay_in_sync(tmp_path):
+    """A YouTube live's video and audio open at different points of the stream."""
+    from src.live.capture import probe_piece, recorder_command
+
+    video, audio = tmp_path / "v.ts", tmp_path / "a.ts"
+    # Same stream clock; the audio playlist was opened 2 s later than the video one.
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=30:duration=12",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-output_ts_offset", "100", "-f", "mpegts", str(video)], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=10",
+                    "-c:a", "aac", "-output_ts_offset", "102", "-f", "mpegts", str(audio)], check=True)
+    pieces = tmp_path / "pieces"
+    pieces.mkdir()
+    command = recorder_command([{"url": str(video)}, {"url": str(audio)}], pieces, "r_", 6, realtime=False)
+    assert "-copyts" in command and command.index("-copyts") < command.index(str(pieces / "r_%06d.ts"))
+    subprocess.run(command, check=True, capture_output=True, timeout=60)
+    first = probe_piece(sorted(pieces.glob("r_*.ts"))[0])
+    # The voice starts 2 s after the picture, as on the stream (not both at 0).
+    assert abs((first["audio_start"] - first["start"]) - 2.0) < 0.1

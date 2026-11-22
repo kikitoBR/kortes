@@ -152,6 +152,11 @@ def recorder_command(
         command += _input_args(item, realtime=realtime)
     audio_input = 1 if len(inputs) > 1 else 0
     return command + [
+        # YouTube lives come as separate video and audio streams, each opened at
+        # its own point of the live; by default ffmpeg starts both at zero and the
+        # voice drifts seconds from the picture. Their own timestamps share the
+        # stream's clock, so keeping them keeps the two in sync.
+        "-copyts",
         "-map", "0:v:0?", "-map", f"{audio_input}:a:0?", "-c", "copy",
         "-f", "segment", "-segment_time", str(piece_seconds),
         "-segment_format", "mpegts", "-reset_timestamps", "0",

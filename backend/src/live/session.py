@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from ..ai import LiveMoments, get_clip_duration_profile, sanitize_hook_title
 from ..clip_review import label, parse_label, transcript_excerpt
@@ -50,6 +50,7 @@ MIN_LOOK_GAP_SECONDS = 40
 FINISHED_MARGIN_SECONDS = 8
 ARCHIVE_BEFORE_SECONDS = 20  # room for the review and "começa antes"
 ARCHIVE_AFTER_SECONDS = 10
+PTS_WRAP_SECONDS = 2**33 / 90000  # MPEG-TS timestamps roll over after ~26.5 h
 OVERLAP_TOLERANCE_SECONDS = 3
 RECONNECT_ATTEMPTS = 5
 PROGRESS_EVERY_SECONDS = 10
@@ -91,6 +92,24 @@ class Piece:
     end: float
     run: str
     transcribed: bool = False
+
+
+def unwrap_piece_times(
+    start: float, audio_start: float, last_start: Optional[float], wrap: float
+) -> Tuple[float, float, float]:
+    """A piece's start and audio start on a clock that never rolls back.
+
+    Pieces keep the stream's own timestamps (so a YouTube live's separate video
+    and audio stay in sync), and MPEG-TS timestamps wrap every ~26.5 h. Returns
+    (start, audio_start, wrap so far).
+    """
+    if last_start is not None and start + wrap < last_start - PTS_WRAP_SECONDS / 2:
+        wrap += PTS_WRAP_SECONDS
+    start += wrap
+    audio_start += wrap
+    if audio_start < start - PTS_WRAP_SECONDS / 2:
+        audio_start += PTS_WRAP_SECONDS  # the audio crossed the wrap before the picture
+    return start, audio_start, wrap
 
 
 def filter_moments(
@@ -193,6 +212,8 @@ class LiveSession:
         self.recorder: Optional[PieceRecorder] = None
         self.run_offset = 0.0
         self.run_origin: Optional[float] = None
+        self.run_last_start: Optional[float] = None
+        self.run_wrap = 0.0
         self.ending = False
         self.cancelled = False
         # The user pressed "Parar": no new moments; "stop_now" also drops the queue.
@@ -247,6 +268,8 @@ class LiveSession:
         gap = max(0.0, time.time() - float(self.state.get("wall_end") or time.time()))
         self.run_offset = float(self.state["clock"]) + (gap if self.state["clock"] else 0.0)
         self.run_origin = None
+        self.run_last_start = None
+        self.run_wrap = 0.0
         self.recorder = PieceRecorder(
             recorder_command(stream.inputs, self.pieces_dir, prefix, self.piece_seconds, realtime=self.realtime),
             self.pieces_dir,
@@ -271,6 +294,10 @@ class LiveSession:
 
     async def add_piece(self, path: Path) -> None:
         info = await run_in_thread(probe_piece, path)
+        info["start"], info["audio_start"], self.run_wrap = unwrap_piece_times(
+            info["start"], info["audio_start"], self.run_last_start, self.run_wrap
+        )
+        self.run_last_start = info["start"]
         if self.run_origin is None:
             self.run_origin = info["start"]
         start = self.run_offset + info["start"] - self.run_origin

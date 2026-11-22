@@ -168,3 +168,39 @@ async def test_clips_of_one_youtube_video_share_a_single_download(tmp_path):
     third = await _shared_youtube_source(video_service, url, str(tmp_path))
     assert first == second == third == tmp_path / "YMnCg1Ks3kQ.mp4"
     assert downloads == [url]
+
+
+async def test_prefetch_prepares_the_next_unprepared_clip_in_the_window(tmp_path, monkeypatch):
+    from src.config import Config
+    from src.media_storage import MediaStorage
+    from src.repositories.clip_repository import ClipRepository
+    from src.services.editor_service import prefetch_next_clip
+    from src.workers.job_queue import JobQueue
+
+    config = Config()
+    config.temp_dir = str(tmp_path)
+    monkeypatch.setattr("src.config.get_config", lambda: config)
+
+    @asynccontextmanager
+    async def sessions():
+        yield object()
+
+    monkeypatch.setattr("src.database.AsyncSessionLocal", sessions)
+    clips = [{"id": name, "filename": f"{name}.mp4", "file_path": f"/clips/{name}.mp4"} for name in "abcd"]
+    monkeypatch.setattr(ClipRepository, "get_clips_by_task", AsyncMock(return_value=clips))
+    monkeypatch.setattr(MediaStorage, "restore_editor", lambda *a, **k: None)
+    enqueue = AsyncMock(return_value="job")
+    monkeypatch.setattr(JobQueue, "enqueue_job", enqueue)
+    # b is already prepared; c is next; d is past the window of 2.
+    atomic_json(editor_dir(str(tmp_path), "task", "b", "b.mp4") / "asset.json", {"status": "ready"})
+    (editor_dir(str(tmp_path), "task", "b", "b.mp4") / "draft.json").write_text("{}")
+    (editor_dir(str(tmp_path), "task", "b", "b.mp4") / "original.json").write_text("{}")
+
+    assert await prefetch_next_clip("task", "a", 2) == "c"
+    enqueue.assert_awaited_once_with("prepare_editor", "task", "c", "c.mp4", prefetch=0)
+    assert read_state(editor_dir(str(tmp_path), "task", "c", "c.mp4"))["status"] == "preparing"
+    # c is being prepared now, so nothing is left in a's window.
+    assert await prefetch_next_clip("task", "a", 2) is None
+    assert await prefetch_next_clip("task", "d", 2) is None
+    assert await prefetch_next_clip("task", "a", 0) is None
+    assert enqueue.await_count == 1

@@ -536,6 +536,38 @@ async def test_review_fixes_are_rendered_before_the_clip_is_saved(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "review, changes",
+    [
+        ({"score": 5, "problems": ["cut_ending"], "end_time": "01:16", "notes": "corta a risada"},
+         ["termina 6 s depois para a reação caber"]),
+        ({"score": 9}, []),
+    ],
+)
+async def test_the_review_tells_the_show_what_it_found(monkeypatch, review, changes):
+    service, _ = reviewed_service(monkeypatch, review)
+    monkeypatch.setattr(task_service_module, "build_review_prompt", lambda *a, **k: "prompt")
+    show = SimpleNamespace(clip=AsyncMock())
+    await service._review_rendered_clip(
+        Path("/tmp/video.mp4"),
+        {"start_time": "00:30", "end_time": "01:10", "hook_title": "Título"},
+        build_clip_result(),
+        0,
+        Path("/tmp"),
+        render_options=(None, None, None, "default", "vertical", True, None),
+        webcam_region=None,
+        hook_intro=None,
+        clip_source=None,
+        voice_energy=[],
+        show=show,
+    )
+    reported = show.clip.await_args_list[0].kwargs["review"]
+    assert reported["score"] == review["score"]
+    assert reported["changes"] == changes
+    assert reported["notes"] == review.get("notes", "")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("review", [{"score": 9}, RuntimeError("model down")])
 async def test_a_passing_or_failed_review_keeps_the_first_render(monkeypatch, review):
     service, _ = reviewed_service(monkeypatch, review)

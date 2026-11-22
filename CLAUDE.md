@@ -251,6 +251,7 @@ YOUTUBE_DOWNLOAD_PROVIDER=yt_dlp     # yt_dlp | apify
 YOUTUBE_PARTIAL_DOWNLOAD=true        # Long videos: audio first, then each clip's section only
 YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS=1200
 CLIP_REVIEW_ENABLED=true             # One AI review (and possible re-render) per clip
+EDITOR_PREFETCH_CLIPS=2              # Clips after the opened one prepared ahead for the editor (0 = off)
 LIVE_CLIPPING_ENABLED=true           # Live links are recorded and clipped while they stream
 LIVE_MAX_CONCURRENT=2                # Lives recorded at once (live-worker max_jobs)
 LIVE_PIECE_SECONDS=30                # Recording piece length
@@ -327,9 +328,18 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
   load from `GET /tasks/{id}/show`): `momento` → `cortes` (ranges, teaser count, timed words, `words_per_line` from the
   caption template) → `trecho` (section download) → `enquadramento` (a 480p silent preview of the real cut and a
   filmstrip, served by `GET /tasks/{id}/show/{clip_key}/{preview.mp4|strip.jpg}`, plus the webcam/game regions) →
-  `render` → `revisao` → `pronto` (the saved clip), with the task's queue of moments. The page draws the preview in a
-  phone with the layout, title and captions, a timeline (title, filmstrip + source pieces, caption lines) that follows
-  the playhead, and a source monitor with the crops. Files live in `TEMP_DIR/show/<task>` until the next clip/task end.
+  `render` → `revisao` (the review's `{score, changes, notes}`) → `pronto` (the saved clip), with the task's queue of
+  moments. The page draws the preview in a phone with the layout, title and captions, a timeline (title, filmstrip +
+  source pieces, caption lines) that follows the playhead, and a source monitor with the crops. A crew of agents
+  (`assembly-crew.ts`: Diretor, Legendista, Câmera, Montador, Revisor) builds it on an overlay canvas as each step
+  arrives: cursors drag the pieces onto the video track, type the title and drop the caption lines, crop the
+  webcam/game on the source and fly each crop into its slot on the phone; each agent's card says what it is doing. A
+  review re-render (new ranges, versioned preview URL) plays the build again. The preview `<video>` must stay laid out
+  (Chrome never autoplays a `display:none` video). Files live in `TEMP_DIR/show/<task>` until the next clip/task end.
+- Editor preparation (`prepare_editor`) re-renders each clip's source minutes once (`clean.mp4`, the export master) plus
+  thumbnails, waveform and the gameplay framing. Opening a clip also prepares the next `EDITOR_PREFETCH_CLIPS`
+  (default 2) in list order, one job at a time (`prefetch_next_clip`); opening an already prepared clip moves the
+  window forward (the page calls `/editor/prepare` on ready clips too).
 - Clip extras (on demand, nothing stored): `GET /tasks/{id}/clips/{clip_id}/cover[/suggest]` renders a cover JPEG (`media/covers.py`), `POST /tasks/{id}/clips/{clip_id}/post-texts` writes TikTok/Instagram/YouTube copy (`ai.generate_post_texts`, owner only)
 
 ## iOS App

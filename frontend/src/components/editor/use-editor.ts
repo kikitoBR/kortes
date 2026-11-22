@@ -181,6 +181,8 @@ export function useEditor(endpoint: string) {
           setError(state.error || "Falha na preparação da pré-visualização");
           return;
         }
+        // Already prepared: the server still gets the next clips ready meanwhile.
+        void editorRequest(`${endpoint}/prepare`, "POST").catch(() => {});
         assetRef.current = state;
         revision.current = state.draft.revision;
         saved.current = JSON.stringify(state.draft.document);

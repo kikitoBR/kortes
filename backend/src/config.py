@@ -78,6 +78,9 @@ class Config:
         # Final review: one AI call per rendered clip that fixes a weak hook,
         # missing context, a dead start or an ending cut mid-reaction.
         self.clip_review_enabled = self._get_bool_env("CLIP_REVIEW_ENABLED", True)
+        # Opening a clip in the editor also prepares the next ones in the list,
+        # one at a time, so moving to them is instant (0 turns it off).
+        self.editor_prefetch_clips = max(0, int(env_or_default("EDITOR_PREFETCH_CLIPS", "2")))
         # Live clipping: a live link records in short pieces kept only for a
         # few minutes; moments become clips while the stream goes on.
         self.live_clipping_enabled = self._get_bool_env("LIVE_CLIPPING_ENABLED", True)

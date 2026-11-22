@@ -207,6 +207,13 @@ class TaskService(ClipEditingMixin):
             "Clip %d review: score %d, problems %s", index + 1, review.score, review.problems
         )
         outcome = apply_review(segment, review, teaser_available=teaser_available)
+        if show is not None:
+            # The page's Revisor says what it found (kept through a re-render).
+            await show.clip(review={
+                "score": review.score,
+                "changes": outcome[1] if outcome else [],
+                "notes": (review.notes or "")[:200],
+            })
         if not outcome:
             return clip_info
         fixed_segment, changes = outcome

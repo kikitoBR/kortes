@@ -394,7 +394,9 @@ def create_optimized_clip(
                     def preview_job():
                         try:
                             extra = make_preview_assets(source_clip_path, show_dir)
-                            show_hook(preview=show_url("preview.mp4"), strip=show_url("strip.jpg"), **extra)
+                            # A review re-render rewrites the same files: a new URL reloads them.
+                            version = f"?v={time.time_ns() // 1_000_000}"
+                            show_hook(preview=show_url("preview.mp4") + version, strip=show_url("strip.jpg") + version, **extra)
                         except Exception:
                             logger.debug("Show preview failed", exc_info=True)
 

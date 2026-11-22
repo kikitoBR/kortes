@@ -21,7 +21,8 @@ from ...editor_document import (
     editor_lock,
     save_document,
 )
-from ...services.editor_service import read_state
+from ...config import get_config
+from ...services.editor_service import prefetch_next_clip, read_state
 from ...services.task_service import TaskService
 from ...workers.job_queue import JobQueue
 from ...utils.async_helpers import run_in_thread
@@ -72,13 +73,23 @@ async def prepare(
     task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
 ):
     clip, directory = await context(request, db, task_id, clip_id)
+    prefetch = get_config().editor_prefetch_clips
     with editor_lock(directory):
-        state = read_state(directory)
-        if state["status"] in {"ready", "preparing"}:
-            return {"status": state["status"]}
-        atomic_json(directory / "asset.json", {"status": "preparing"})
+        status = read_state(directory)["status"]
+        if status not in {"ready", "preparing"}:
+            atomic_json(directory / "asset.json", {"status": "preparing"})
+    if status == "ready":
+        # The user moved to this clip: get the next ones ready meanwhile.
+        try:
+            await prefetch_next_clip(task_id, clip_id, prefetch)
+        except Exception:
+            logging.getLogger(__name__).warning("Editor prefetch failed", exc_info=True)
+    if status in {"ready", "preparing"}:
+        return {"status": status}
     try:
-        await JobQueue.enqueue_job("prepare_editor", task_id, clip_id, clip["filename"])
+        await JobQueue.enqueue_job(
+            "prepare_editor", task_id, clip_id, clip["filename"], prefetch=prefetch
+        )
     except Exception:
         atomic_json(
             directory / "asset.json",

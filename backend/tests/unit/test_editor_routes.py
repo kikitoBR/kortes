@@ -154,3 +154,19 @@ async def test_local_preview_and_export_survive_storage_outage(client, monkeypat
     assert preview.status_code == export.status_code == 200
     assert preview.content == b"local preview"
     assert export.content == b"local export"
+
+
+async def test_prepare_queues_the_clip_with_a_prefetch_window(client, monkeypatch):
+    http, service, doc, directory = client
+    prefetch = AsyncMock(return_value=None)
+    monkeypatch.setattr(editor, "prefetch_next_clip", prefetch)
+    # Ready: nothing to render, but the next clips start getting ready.
+    assert (await http.post("/tasks/task/clips/clip/editor/prepare")).json() == {"status": "ready"}
+    prefetch.assert_awaited_once_with("task", "clip", editor.get_config().editor_prefetch_clips)
+    editor.JobQueue.enqueue_job.assert_not_awaited()
+    # Not prepared yet: this clip is queued and carries the window along.
+    (directory / "asset.json").unlink()
+    assert (await http.post("/tasks/task/clips/clip/editor/prepare")).json() == {"status": "preparing"}
+    editor.JobQueue.enqueue_job.assert_awaited_once_with(
+        "prepare_editor", "task", "clip", "clip.mp4", prefetch=editor.get_config().editor_prefetch_clips
+    )

@@ -95,7 +95,7 @@ async def test_a_render_publishes_its_real_assembly(config, source):
     # A light preview of the real cut and its filmstrip, served by the API.
     folder = show_dir("task-show") / clip["key"]
     assert (folder / "preview.mp4").exists() and (folder / "strip.jpg").exists()
-    assert clip["preview"] == f"/tasks/task-show/show/{clip['key']}/preview.mp4"
+    assert clip["preview"].startswith(f"/tasks/task-show/show/{clip['key']}/preview.mp4?v=")
     assert state["queue"][1]["status"] == "na fila"
 
     await show.finish()

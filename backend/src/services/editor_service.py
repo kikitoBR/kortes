@@ -176,8 +176,52 @@ def gameplay_framing(clip_path: Path, webcam_region=None, output_format: str = "
     }
 
 
+async def prefetch_next_clip(task_id: str, clip_id: str, window: int):
+    """Start preparing the first unprepared clip among the next ``window`` ones.
+
+    Clips follow the list order. The prepared clip carries on with what is left
+    of the window, so prefetching takes one worker slot at a time. Returns the
+    clip id it started, or None.
+    """
+    if window <= 0:
+        return None
+    from ..config import get_config
+    from ..database import AsyncSessionLocal
+    from ..media_storage import is_s3
+    from ..repositories.clip_repository import ClipRepository
+    from ..workers.job_queue import JobQueue
+
+    async with AsyncSessionLocal() as db:
+        clips = await ClipRepository.get_clips_by_task(db, task_id)
+    ids = [clip["id"] for clip in clips]
+    if clip_id not in ids:
+        return None
+    start = ids.index(clip_id) + 1
+    for step, clip in enumerate(clips[start : start + window], start=1):
+        directory = editor_dir(get_config().temp_dir, task_id, clip["id"], clip["filename"])
+        await run_in_thread(
+            MediaStorage().restore_editor, directory, s3_backed=is_s3(clip.get("file_path") or "")
+        )
+        with editor_lock(directory):
+            # Ready, already being prepared, or failed before: leave it.
+            if read_state(directory)["status"] != "unprepared":
+                continue
+            atomic_json(directory / "asset.json", {"status": "preparing"})
+        try:
+            await JobQueue.enqueue_job(
+                "prepare_editor", task_id, clip["id"], clip["filename"], prefetch=window - step
+            )
+        except Exception:
+            # Opening the clip later prepares it the usual way.
+            (directory / "asset.json").unlink(missing_ok=True)
+            logging.getLogger(__name__).warning("Editor prefetch could not be queued", exc_info=True)
+            return None
+        return clip["id"]
+    return None
+
+
 @media_work
-async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
+async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str, prefetch: int = 0):
     from ..database import AsyncSessionLocal
     from .task_service import TaskService
     from ..config import get_config
@@ -197,6 +241,7 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
     source = None
     clip_source = None
     render_source = None
+    prepared = False
     try:
         await run_in_thread(storage.restore_editor, directory)
         async with AsyncSessionLocal() as db:
@@ -267,18 +312,23 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
             )
             if not rendered:
                 raise ValueError("Não foi possível preparar o vídeo original")
-            metadata = await run_in_thread(make_assets, directory)
-            gameplay = None
             output_format = source_settings.get("output_format")
-            if output_format in WEBCAM_OUTPUT_FORMATS:
+
+            async def framing():
+                if output_format not in WEBCAM_OUTPUT_FORMATS:
+                    return None
                 try:
-                    gameplay = await run_in_thread(
+                    return await run_in_thread(
                         gameplay_framing, clean, source_settings.get("webcam_region"), output_format
                     )
                 except Exception:
                     logging.getLogger(__name__).warning(
                         "Gameplay framing for the editor failed", exc_info=True
                     )
+                    return None
+
+            # Both only read clean.mp4: thumbnails/waveform and the webcam search at once.
+            metadata, gameplay = await asyncio.gather(run_in_thread(make_assets, directory), framing())
             # Offered again when the user switches the draft to webcam + game.
             metadata["gameplay"] = gameplay
             transcript = load_cached_transcript_data(source)
@@ -340,9 +390,8 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
                     )
                     atomic_json(directory / "original.json", initial)
                 atomic_json(directory / "asset.json", metadata)
+            prepared = True
     except Exception:
-        import logging
-
         logging.getLogger(__name__).exception("Editor preparation failed")
         from ..youtube_utils import YOUTUBE_BOT_CHECK_MESSAGE, youtube_blocked_by_bot_check
 
@@ -363,6 +412,11 @@ async def prepare_editor(ctx, task_id: str, clip_id: str, filename: str):
         elif source is not None:
             await run_in_thread(storage.save_source_metadata, source)
         await run_in_thread(storage.save_editor, directory)
+    if prepared and prefetch > 0:
+        try:
+            await prefetch_next_clip(task_id, clip_id, prefetch)
+        except Exception:
+            logging.getLogger(__name__).warning("Editor prefetch failed", exc_info=True)
 
 
 @media_work
@@ -395,8 +449,6 @@ async def export_editor(ctx, task_id: str, clip_id: str, filename: str, job_id: 
             directory / f"job-{job_id}.json", {"status": "cancelled", "progress": 0}
         )
     except Exception:
-        import logging
-
         logging.getLogger(__name__).exception("Editor export failed")
         atomic_json(
             directory / f"job-{job_id}.json",
@@ -570,8 +622,6 @@ async def combine_editor(ctx, task_id: str, clip_id: str, filename: str, job_id:
             directory / f"job-{job_id}.json", {"status": "cancelled", "progress": 0}
         )
     except Exception:
-        import logging
-
         logging.getLogger(__name__).exception("Combining editor drafts failed")
         atomic_json(
             directory / f"job-{job_id}.json",

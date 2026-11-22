@@ -1047,7 +1047,6 @@ export default function TaskPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {/* Delete generation confirmation */}
       <AlertDialog open={stopLiveOpen} onOpenChange={setStopLiveOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1055,24 +1054,38 @@ export default function TaskPage() {
             <AlertDialogDescription>
               A gravação para agora e nenhum momento novo é procurado. Os cortes prontos ficam.
               {queuedLiveClips > 0
-                ? ` Ainda há ${queuedLiveClips} ${queuedLiveClips === 1 ? "corte" : "cortes"} na fila: você pode esperar eles ficarem prontos ou descartar.`
+                ? ` Ainda há ${queuedLiveClips} ${queuedLiveClips === 1 ? "corte" : "cortes"} na fila.`
                 : " O corte que estiver em montagem termina antes."}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Continuar gravando</AlertDialogCancel>
+          {/* Stacked options: three side-by-side buttons do not fit the dialog. */}
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-col sm:justify-start sm:space-x-0">
+            <AlertDialogAction
+              className="h-auto w-full flex-col items-start gap-0.5 whitespace-normal py-2.5 text-left"
+              onClick={() => void stopLive(false)}
+            >
+              <span>{queuedLiveClips > 0 ? "Parar e terminar a fila" : "Parar a live"}</span>
+              <span className="text-xs font-normal opacity-75">
+                {queuedLiveClips > 0
+                  ? `${queuedLiveClips === 1 ? "O corte da fila fica pronto" : `Os ${queuedLiveClips} cortes da fila ficam prontos`} antes de encerrar.`
+                  : "Encerra assim que o corte em montagem terminar."}
+              </span>
+            </AlertDialogAction>
             {queuedLiveClips > 0 && (
-              <AlertDialogAction className="bg-transparent text-foreground border hover:bg-accent" onClick={() => void stopLive(true)}>
-                Parar e descartar a fila
+              <AlertDialogAction
+                className="h-auto w-full flex-col items-start gap-0.5 whitespace-normal border bg-transparent py-2.5 text-left text-foreground hover:bg-accent"
+                onClick={() => void stopLive(true)}
+              >
+                <span>Parar e descartar a fila</span>
+                <span className="text-xs font-normal text-muted-foreground">Só o corte em montagem termina; a fila é descartada.</span>
               </AlertDialogAction>
             )}
-            <AlertDialogAction onClick={() => void stopLive(false)}>
-              {queuedLiveClips > 0 ? "Parar e terminar a fila" : "Parar"}
-            </AlertDialogAction>
+            <AlertDialogCancel className="mt-0 w-full">Continuar gravando</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Delete generation confirmation */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>

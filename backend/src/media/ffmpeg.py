@@ -299,8 +299,12 @@ def ffmpeg_escape_filter_value(value: str) -> str:
 
 
 def ffmpeg_escape_filter_path(path: Path) -> str:
-    """Escape a filesystem path for use as an ffmpeg filter option value."""
-    return ffmpeg_escape_filter_value(str(path))
+    """Escape a filesystem path for use as an ffmpeg filter option value.
+
+    Forward slashes on every system: ffmpeg on Windows accepts ``C:/Users/...``,
+    and the path then needs no escaped backslashes.
+    """
+    return ffmpeg_escape_filter_value(Path(path).as_posix())
 
 
 def build_final_video_encode_args(

@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,9 +14,13 @@ from src.media.ffmpeg import (
 def test_escapes_windows_drive_and_separators_for_both_parse_levels():
     escaped = ffmpeg_escape_filter_path(Path(r"C:\Users\O'Brien\Temp\clip.ass"))
 
-    assert escaped == (
-        r"C\\:\\\\Users\\\\O\\\'Brien\\\\Temp\\\\clip.ass"
-    )
+    if os.name == "nt":
+        # A real Windows path is passed with forward slashes, which ffmpeg accepts.
+        assert escaped == r"C\\:/Users/O\\\'Brien/Temp/clip.ass"
+    else:
+        assert escaped == (
+            r"C\\:\\\\Users\\\\O\\\'Brien\\\\Temp\\\\clip.ass"
+        )
 
 
 def test_escapes_filtergraph_separators():
@@ -41,7 +46,9 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Hi
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 def test_ffmpeg_opens_subtitles_from_awkward_directory(tmp_path):
-    awkward = tmp_path / "it's [a], b; c:d \\ e"
+    # Colons and backslashes cannot be in a Windows folder name; there the drive
+    # colon (C:) still exercises the colon escaping.
+    awkward = tmp_path / ("it's [a], b; e" if os.name == "nt" else "it's [a], b; c:d \\ e")
     awkward.mkdir()
     ass_path = awkward / "captions.ass"
     ass_path.write_text(ASS)

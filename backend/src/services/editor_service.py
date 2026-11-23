@@ -558,9 +558,9 @@ async def combine_editor(ctx, task_id: str, clip_id: str, filename: str, job_id:
             await run_in_thread(run_render, commands, directory, job_id, cursor)
             if (directory / f"cancel-{job_id}").exists():
                 raise InterruptedError()
-            # A symlink allows the second rendering pass to observe cancellation.
-            (work / f"cancel-{job_id}").symlink_to(directory / f"cancel-{job_id}")
-            await run_in_thread(render_document, work, job_id, document, "tiktok")
+            # The second pass watches the job's own cancel marker (no symlink:
+            # Windows only lets administrators create them).
+            await run_in_thread(render_document, work, job_id, document, "tiktok", directory)
             new_filename = f"combined_{uuid.uuid4().hex}.mp4"
             clip_path = Path(get_config().temp_dir) / "clips" / new_filename
             clip_path.parent.mkdir(parents=True, exist_ok=True)

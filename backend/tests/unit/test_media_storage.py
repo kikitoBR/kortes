@@ -418,7 +418,7 @@ async def test_failed_analysis_preserves_source_timings_and_retries_upload(stora
 
 def test_optional_reader_blocks_lease_release_until_metadata_read_finishes(storage):
     from src.media_storage import _release_workspace
-    import fcntl
+    from src import file_lock as fcntl
     key = storage.key("clips", "task", "upload", "video.mp4")
     storage.client.objects[key] = b"video"
     storage.client.objects[str(Path(key).with_suffix(".source_map.json"))] = b'{}'

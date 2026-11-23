@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src import video_utils
+from src.media.ffmpeg import ffmpeg_escape_filter_path
 from src.media import timeline
 
 
@@ -275,7 +276,7 @@ def test_burn_ass_subtitles_passes_selected_fonts_dir(tmp_path):
 
     assert success is True
     video_filter = commands[0][commands[0].index("-vf") + 1]
-    assert f"fontsdir={tmp_path / 'fonts'}" in video_filter
+    assert f"fontsdir={ffmpeg_escape_filter_path(tmp_path / 'fonts')}" in video_filter
     assert video_filter.endswith(",setsar=1")
 
 

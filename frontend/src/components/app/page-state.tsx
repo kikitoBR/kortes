@@ -1,14 +1,8 @@
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { KortesLoading } from "@/components/kortes-loader";
 
 export function PageLoading() {
-  return (
-    <div role="status" aria-label="Carregando" className="mx-auto max-w-5xl space-y-5 px-4 py-8">
-      <span className="sr-only">Carregando…</span>
-      <Skeleton className="h-9 w-48" />
-      {[0, 1, 2].map((key) => <Skeleton key={key} className="h-32 w-full rounded-xl" />)}
-    </div>
-  );
+  return <KortesLoading className="min-h-[60vh]" size={72} />;
 }
 
 export function PageError({ message, retry }: { message: string; retry?: () => void }) {

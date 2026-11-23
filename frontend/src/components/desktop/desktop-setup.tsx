@@ -11,8 +11,6 @@ export type LicenseInfo = {
   name: string;
   status: string;
   expires_at: string | null;
-  monthly_tokens: number;
-  used_tokens: number;
   devices: number;
   max_devices: number;
 };
@@ -60,12 +58,6 @@ async function send(path: string, method: "POST" | "DELETE", key?: string) {
     throw new Error((data as { detail?: string }).detail || "Não deu certo. Tente de novo.");
   }
   return data;
-}
-
-function formatTokens(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(".0", "")} mi`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)} mil`;
-  return String(value);
 }
 
 function formatDate(value: string | null) {
@@ -185,7 +177,6 @@ function KeyForm({ placeholder, buttonLabel, onSubmit }: {
 function LicenseCard({ state, onChange }: { state: DesktopSetupState; onChange: () => Promise<void> }) {
   const [replacing, setReplacing] = useState(false);
   const info = state.license.info;
-  const pct = info && info.monthly_tokens > 0 ? Math.min(100, (100 * info.used_tokens) / info.monthly_tokens) : 0;
 
   const activate = async (key: string) => {
     await send("license", "POST", key);
@@ -208,18 +199,7 @@ function LicenseCard({ state, onChange }: { state: DesktopSetupState; onChange: 
             <span className="font-medium">Licença ativa</span>
             <span className="text-muted-foreground">· {info.name}</span>
           </div>
-          <dl className="grid gap-3 text-sm sm:grid-cols-3">
-            <div>
-              <dt className="text-xs text-muted-foreground">IA usada neste mês</dt>
-              <dd className="tabular-nums">
-                {formatTokens(info.used_tokens)} / {info.monthly_tokens > 0 ? formatTokens(info.monthly_tokens) : "sem limite"}
-              </dd>
-              {info.monthly_tokens > 0 ? (
-                <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
-                </div>
-              ) : null}
-            </div>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs text-muted-foreground">Computadores</dt>
               <dd className="tabular-nums">{info.devices} de {info.max_devices}</dd>

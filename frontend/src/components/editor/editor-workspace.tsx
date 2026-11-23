@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Undo2,
 } from "lucide-react";
+import { KortesLoader } from "@/components/kortes-loader";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -600,7 +601,7 @@ export function EditorWorkspace({
                 : "Carregando o vídeo original, sincronia de palavras, miniaturas e forma de onda de áudio. Isso acontece apenas uma vez por clipe."}
             </p>
             {!editor.error && (
-              <Loader2 className="mt-5 size-5 animate-spin text-muted-foreground" />
+              <KortesLoader size={56} className="mx-auto mt-5" />
             )}
           </Panel>
         )}

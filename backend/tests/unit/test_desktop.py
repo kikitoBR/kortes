@@ -124,7 +124,7 @@ def test_without_an_assemblyai_key_desktop_transcribes_with_whisper(monkeypatch)
     config = make_config(monkeypatch)
     config.assembly_ai_api_key = None
     monkeypatch.setattr(transcription, "get_config", lambda: config)
-    monkeypatch.setattr(transcription, "_get_transcript_with_whisper", lambda path, cfg: "whisper")
+    monkeypatch.setattr(transcription, "_get_transcript_with_whisper", lambda path, cfg, *_: "whisper")
     monkeypatch.setattr(transcription, "_get_transcript_with_assemblyai",
                         lambda *a: pytest.fail("AssemblyAI must not be called without a key"))
 
@@ -142,7 +142,7 @@ def test_when_assemblyai_fails_desktop_falls_back_to_whisper(monkeypatch):
 
     monkeypatch.setattr(transcription, "get_config", lambda: config)
     monkeypatch.setattr(transcription, "_get_transcript_with_assemblyai", broken)
-    monkeypatch.setattr(transcription, "_get_transcript_with_whisper", lambda path, cfg: "whisper")
+    monkeypatch.setattr(transcription, "_get_transcript_with_whisper", lambda path, cfg, *_: "whisper")
 
     assert transcription.get_video_transcript(Path("video.mp4")) == "whisper"
 

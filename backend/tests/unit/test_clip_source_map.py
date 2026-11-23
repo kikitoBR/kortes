@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -107,171 +109,100 @@ async def test_trim_clip_uses_persisted_source_ranges(isolated_clip_edits, monke
     assert load_clip_source_ranges(output_path) == [(13.0, 15.0)]
 
 
-@pytest.mark.asyncio
-async def test_regenerate_all_clips_reuses_persisted_source_ranges(isolated_clip_edits, monkeypatch, tmp_path):
-    source_path = tmp_path / "source.mp4"
-    source_path.write_bytes(b"source")
+def _regeneration_service(tmp_path, monkeypatch, captured):
+    """A TaskService whose clip renders are recorded instead of made."""
     clip_path = tmp_path / "clip.mp4"
     clip_path.write_bytes(b"clip")
     save_clip_source_ranges(clip_path, [(10.0, 11.0), (13.0, 15.0)])
+    clip = {
+        "id": "clip-1", "task_id": "task-1", "file_path": str(clip_path), "clip_order": 1,
+        "start_time": "00:10", "end_time": "00:20", "duration": 3.0, "text": "hello",
+        "hook_title": "Title",
+    }
 
-    captured: dict[str, object] = {}
+    class _Source:
+        timing_path = tmp_path / "source.mp4"
+        closed = False
 
-    class _FakeTaskRepo:
-        async def get_task_by_id(self, _db, _task_id: str):
-            return {
-                "id": "task-1",
-                "source_url": "upload://source.mp4",
-                "source_type": "video_url",
-            }
+        def close(self):
+            _Source.closed = True
 
-        async def update_task_clips(self, _db, _task_id: str, _clip_ids):
+    async def render(_timing, segment, _index, output_dir, *_args, **_kwargs):
+        captured.setdefault("segments", []).append(segment)
+        if captured.get("fail"):
             return None
-
-    class _FakeClipRepoWithTask:
-        async def get_clips_by_task(self, _db, _task_id: str):
-            return [
-                {
-                    "id": "clip-1",
-                    "task_id": "task-1",
-                    "file_path": str(clip_path),
-                    "start_time": "00:10",
-                    "end_time": "00:20",
-                    "duration": 3.0,
-                    "text": "hello",
-                    "relevance_score": 0.8,
-                    "reasoning": "test",
-                    "virality_score": 1,
-                    "hook_score": 1,
-                    "engagement_score": 1,
-                    "value_score": 1,
-                    "shareability_score": 1,
-                    "hook_type": "hook",
-                }
-            ]
-
-        async def delete_clips_by_task(self, _db, _task_id: str):
-            return None
-
-    class _FakeVideoService:
-        def resolve_local_video_path(self, _url: str) -> Path:
-            return source_path
-
-        async def create_video_clips(self, _video_path: Path, segments, *_args, **_kwargs):
-            captured["segments"] = segments
-            return []
+        return {"filename": "new.mp4", "path": str(output_dir / "new.mp4"), "start_time": "00:10",
+                "end_time": "00:15", "duration": 3.0, "text": "hello"}
 
     service = TaskService(db=None)
-    async def fake_load_task_source_settings(_task_id: str):
-        return {
-            "output_format": "vertical",
-            "add_subtitles": True,
-            "cut_long_pauses": False,
-            "pause_threshold_ms": 900,
-            "remove_filler_words": False,
-            "filtered_words": [],
-        }
+    service.config.temp_dir = str(tmp_path)
+    service.task_repo = SimpleNamespace(
+        get_task_by_id=AsyncMock(return_value={"id": "task-1", "source_url": "upload://source.mp4", "source_type": "video_url"})
+    )
+    service.clip_repo = SimpleNamespace(
+        get_clips_by_task=AsyncMock(return_value=[clip]), update_clip=AsyncMock()
+    )
+    service.video_service = SimpleNamespace(create_single_clip=render)
+    service._clip_source_for_task = AsyncMock(return_value=_Source())
 
-    monkeypatch.setattr(service, "_load_task_source_settings", fake_load_task_source_settings)
-    service.task_repo = _FakeTaskRepo()
-    service.clip_repo = _FakeClipRepoWithTask()
-    service.video_service = _FakeVideoService()
+    async def settings(_task_id: str):
+        return {"output_format": "vertical", "add_subtitles": True, "cut_long_pauses": False,
+                "pause_threshold_ms": 900, "remove_filler_words": False, "filtered_words": []}
 
-    await service.regenerate_all_clips_for_task(
-        "task-1",
-        "TikTokSans-Regular",
-        24,
-        "#FFFFFF",
-        "default",
-        cleanup_settings={},
+    monkeypatch.setattr(service, "_load_task_source_settings", settings)
+    return service, _Source
+
+
+@pytest.mark.asyncio
+async def test_regenerate_all_clips_reuses_persisted_source_ranges(isolated_clip_edits, monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    service, source = _regeneration_service(tmp_path, monkeypatch, captured)
+
+    result = await service.regenerate_all_clips_for_task(
+        "task-1", "TikTokSans-Regular", 24, "#FFFFFF", "default", cleanup_settings={}
     )
 
-    segments = captured["segments"]
-    assert segments[0]["keep_ranges"] == [(10.0, 11.0), (13.0, 15.0)]
+    segment = captured["segments"][0]
+    assert segment["keep_ranges"] == [(10.0, 11.0), (13.0, 15.0)]
+    assert segment["hook_title"] == "Title"
+    # The clip keeps its row (id, moment, title): only its file changes.
+    service.clip_repo.update_clip.assert_awaited_once()
+    assert service.clip_repo.update_clip.await_args.args[1] == "clip-1"
+    assert result == {"done": 1, "failed": 0}
+    assert source.closed
 
 
 @pytest.mark.asyncio
 async def test_regenerate_all_clips_recomputes_cleanup_from_source_ranges(isolated_clip_edits,
     monkeypatch, tmp_path
 ):
-    source_path = tmp_path / "source.mp4"
-    source_path.write_bytes(b"source")
-    clip_path = tmp_path / "clip.mp4"
-    clip_path.write_bytes(b"clip")
-    save_clip_source_ranges(clip_path, [(10.0, 11.0), (13.0, 15.0)])
-
     captured: dict[str, object] = {}
-
-    class _FakeTaskRepo:
-        async def get_task_by_id(self, _db, _task_id: str):
-            return {
-                "id": "task-1",
-                "source_url": "upload://source.mp4",
-                "source_type": "video_url",
-            }
-
-        async def update_task_clips(self, _db, _task_id: str, _clip_ids):
-            return None
-
-    class _FakeClipRepoWithTask:
-        async def get_clips_by_task(self, _db, _task_id: str):
-            return [
-                {
-                    "id": "clip-1",
-                    "task_id": "task-1",
-                    "file_path": str(clip_path),
-                    "start_time": "00:10",
-                    "end_time": "00:20",
-                    "duration": 3.0,
-                    "text": "hello",
-                    "relevance_score": 0.8,
-                    "reasoning": "test",
-                    "virality_score": 1,
-                    "hook_score": 1,
-                    "engagement_score": 1,
-                    "value_score": 1,
-                    "shareability_score": 1,
-                    "hook_type": "hook",
-                }
-            ]
-
-        async def delete_clips_by_task(self, _db, _task_id: str):
-            return None
-
-    class _FakeVideoService:
-        def resolve_local_video_path(self, _url: str) -> Path:
-            return source_path
-
-        async def create_video_clips(self, _video_path: Path, segments, *_args, **_kwargs):
-            captured["segments"] = segments
-            return []
-
-    service = TaskService(db=None)
-
-    async def fake_load_task_source_settings(_task_id: str):
-        return {
-            "output_format": "vertical",
-            "add_subtitles": True,
-            "cut_long_pauses": False,
-            "pause_threshold_ms": 900,
-            "remove_filler_words": False,
-            "filtered_words": [],
-        }
-
-    monkeypatch.setattr(service, "_load_task_source_settings", fake_load_task_source_settings)
-    service.task_repo = _FakeTaskRepo()
-    service.clip_repo = _FakeClipRepoWithTask()
-    service.video_service = _FakeVideoService()
+    service, _ = _regeneration_service(tmp_path, monkeypatch, captured)
 
     await service.regenerate_all_clips_for_task(
-        "task-1",
-        "TikTokSans-Regular",
-        24,
-        "#FFFFFF",
-        "default",
+        "task-1", "TikTokSans-Regular", 24, "#FFFFFF", "default",
         cleanup_settings={"cut_long_pauses": True},
     )
 
-    segments = captured["segments"]
-    assert "keep_ranges" not in segments[0]
-    assert segments[0]["source_ranges"] == [(10.0, 11.0), (13.0, 15.0)]
+    segment = captured["segments"][0]
+    assert "keep_ranges" not in segment
+    assert segment["source_ranges"] == [(10.0, 11.0), (13.0, 15.0)]
+
+
+@pytest.mark.asyncio
+async def test_regeneration_keeps_a_clip_that_fails_and_reports_progress(isolated_clip_edits, monkeypatch, tmp_path):
+    captured: dict[str, object] = {"fail": True}
+    service, source = _regeneration_service(tmp_path, monkeypatch, captured)
+    steps = []
+
+    async def progress(index, total):
+        steps.append((index, total))
+
+    result = await service.regenerate_all_clips_for_task(
+        "task-1", None, None, None, "default", progress_callback=progress
+    )
+
+    assert result == {"done": 0, "failed": 1}
+    service.clip_repo.update_clip.assert_not_awaited()
+    assert steps == [(0, 1)]
+    assert source.closed

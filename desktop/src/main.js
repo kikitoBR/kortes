@@ -22,29 +22,49 @@ function log(line) {
 }
 
 const ICON = path.join(__dirname, "..", "build", "icon.ico");
-const LOGO = path.join(__dirname, "..", "assets", "logo.png");
+
+// The Kortes scissors drawing themselves and snipping (same mark as the app's loaders).
+const SPLASH_LOGO = `<svg viewBox="0 0 200 200" width="112" height="112" role="img" aria-label="Carregando">
+  <g class="w">
+    <g class="g" stroke="#9D9FA2" stroke-width="16.6" fill="none">
+      <circle cx="44.3" cy="61.1" r="25" class="c" />
+      <line x1="44.3" y1="86.1" x2="103.5" y2="86.1" class="s" />
+      <line x1="150" y1="86.1" x2="180.7" y2="86.1" stroke-linecap="round" class="t" />
+    </g>
+    <g class="d" stroke="#1D2022" stroke-width="16.6" fill="none">
+      <circle cx="77.7" cy="147.3" r="25" class="c" />
+      <line x1="60.02" y1="129.62" x2="156.34" y2="33.3" stroke-linecap="round" class="b" />
+    </g>
+  </g>
+</svg>`;
+
+const SPLASH_CSS = `
+  .w { transform-origin: 100px 100px; animation: breathe 1.4s ease-in-out infinite; }
+  .g, .d { transform-origin: 103.5px 86.1px; }
+  .g { animation: cut-g 1.4s cubic-bezier(.45,.05,.55,.95) infinite; }
+  .d { animation: cut-d 1.4s cubic-bezier(.45,.05,.55,.95) infinite; }
+  .c { stroke-dasharray: 160; animation: tc 1.4s ease-in-out infinite; }
+  .s { stroke-dasharray: 65; animation: ts 1.4s ease-in-out infinite; }
+  .t { stroke-dasharray: 36; animation: tt 1.4s ease-in-out infinite; }
+  .b { stroke-dasharray: 142; animation: tb 1.4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(.96); opacity: .72 } 35%,72% { transform: scale(1); opacity: 1 } 55% { transform: scale(1.025); opacity: 1 } }
+  @keyframes cut-g { 0%,38%,78%,100% { transform: rotate(0) } 56% { transform: rotate(-11deg) } }
+  @keyframes cut-d { 0%,38%,78%,100% { transform: rotate(0) } 56% { transform: rotate(11deg) } }
+  @keyframes tc { 0% { stroke-dashoffset: 160 } 34%,80% { stroke-dashoffset: 0 } 100% { stroke-dashoffset: -160 } }
+  @keyframes ts { 0%,8% { stroke-dashoffset: 65 } 36%,80% { stroke-dashoffset: 0 } 100% { stroke-dashoffset: -65 } }
+  @keyframes tt { 0%,14% { stroke-dashoffset: 36 } 38%,80% { stroke-dashoffset: 0 } 100% { stroke-dashoffset: -36 } }
+  @keyframes tb { 0%,10% { stroke-dashoffset: 142 } 36%,80% { stroke-dashoffset: 0 } 100% { stroke-dashoffset: -142 } }
+  #m { transition: opacity .2s }`;
 
 function showSplash(window, message) {
-  let logo = "";
-  try {
-    logo = `data:image/png;base64,${fs.readFileSync(LOGO).toString("base64")}`;
-  } catch {
-    // the name alone still identifies the app
-  }
   const html = `<!doctype html><html lang="pt-BR"><meta charset="utf-8">
-    <style>
-      @keyframes pulse { 0%,100% { opacity:.35 } 50% { opacity:1 } }
-      .dot { display:inline-block; width:6px; height:6px; margin:0 3px; border-radius:50%;
-        background:#1c1917; animation:pulse 1.2s infinite; }
-      .dot:nth-child(2) { animation-delay:.2s } .dot:nth-child(3) { animation-delay:.4s }
-    </style>
+    <style>${SPLASH_CSS}</style>
     <body style="margin:0;height:100vh;display:grid;place-items:center;background:#faf8f5;
       font:15px system-ui,sans-serif;color:#1c1917;user-select:none;cursor:default">
       <div style="text-align:center">
-        ${logo ? `<img src="${logo}" width="72" height="72" alt="" style="display:block;margin:0 auto 14px">` : ""}
-        <div style="font-size:28px;font-weight:700;letter-spacing:-.02em">Kortes</div>
-        <div id="m" style="margin-top:12px;color:#78716c">${message}</div>
-        <div style="margin-top:18px"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        ${SPLASH_LOGO}
+        <div style="margin-top:10px;font-size:28px;font-weight:700;letter-spacing:-.02em">Kortes</div>
+        <div id="m" style="margin-top:10px;color:#78716c">${message}</div>
       </div></body></html>`;
   window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }

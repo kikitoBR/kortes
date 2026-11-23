@@ -1,6 +1,7 @@
 node_modules/
 runtime/
 build/app/
+build/teste/
 dist/
 build/frontend-src/
 build/build-home/

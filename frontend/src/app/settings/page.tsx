@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { SubscriptionCancelBanner } from "@/components/subscription-cancel-banner";
 import { DeleteAccountSection } from "@/components/delete-account-section";
-import { Skeleton } from "@/components/ui/skeleton";
+import { KortesLoading } from "@/components/kortes-loader";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -263,10 +263,7 @@ export default function SettingsPage() {
 
   if (isPending || (session?.user && isFetching)) {
     return (
-      <div role="status" aria-label="Carregando" className="mx-auto w-full max-w-3xl space-y-6 px-4 py-8 sm:px-8 md:py-10">
-        <Skeleton className="h-9 w-40" />
-        {[0, 1, 2].map((key) => <Skeleton key={key} className="h-40 w-full rounded-2xl" />)}
-      </div>
+      <KortesLoading className="min-h-[60vh]" size={72} />
     );
   }
 

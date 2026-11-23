@@ -11,7 +11,7 @@ def isolated_clip_edits(monkeypatch):
     Real transaction behavior is covered in integration/test_clip_edit_atomicity.py.
     """
     @asynccontextmanager
-    async def transaction(_db, _task_id):
+    async def transaction(_db, _task_id, **_kwargs):
         yield
 
     monkeypatch.setattr(

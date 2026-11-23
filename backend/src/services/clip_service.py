@@ -3,6 +3,7 @@
 The mixin uses TaskService's repositories, configuration, and cache key contract.
 """
 
+from ..repositories import edit_transaction
 from ..repositories.edit_transaction import serialized_task_edit
 from typing import Dict, Any, Optional
 import logging
@@ -37,6 +38,8 @@ from ..media_storage import MediaStorage
 
 logger = logging.getLogger(__name__)
 
+REGENERATION_MESSAGE = "Refazendo os clipes com as novas configurações…"
+
 
 class ClipEditingMixin:
     @serialized_task_edit
@@ -56,10 +59,11 @@ class ClipEditingMixin:
         font_color: Optional[str],
         caption_template: str,
         include_broll: bool,
-        apply_to_existing: bool,
+        apply_to_existing: bool = False,
         cleanup_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Update task-level settings and optionally regenerate all clips."""
+        """Save the task's styling. Remaking the clips with it is a worker job
+        (``start_clip_regeneration``): it takes minutes on a long video."""
         await self.task_repo.update_task_settings(
             self.db,
             task_id,
@@ -69,21 +73,8 @@ class ClipEditingMixin:
             caption_template,
             include_broll,
         )
-
-        if apply_to_existing:
-            await self.regenerate_all_clips_for_task(
-                task_id,
-                font_family,
-                font_size,
-                font_color,
-                caption_template,
-                cleanup_settings=cleanup_settings,
-            )
-
         return await self.get_task_with_clips(task_id) or {}
 
-
-    @serialized_task_edit
     async def regenerate_all_clips_for_task(
         self,
         task_id: str,
@@ -92,19 +83,26 @@ class ClipEditingMixin:
         font_color: Optional[str],
         caption_template: str,
         cleanup_settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Regenerate all clips in a task using existing segment boundaries."""
+        progress_callback=None,
+        recompute_cleanup: Optional[bool] = None,
+    ) -> Dict[str, int]:
+        """Render every clip of a task again with new settings, one clip at a time.
+
+        Runs in the worker while the task is "processing" (other edits wait for
+        it to end). Each clip keeps its id, moment and title; only its picture is
+        made again, from a section of the source like the editor does. The task
+        row is locked just while each new clip is saved, never across a render:
+        a long video takes many minutes and the database drops a transaction
+        left open for 5. Stops when the task is cancelled.
+        Returns ``{"done": n, "failed": n}``.
+        """
+        from ..clip_review import segment_from_clip
+
         task = await self.task_repo.get_task_by_id(self.db, task_id)
         if not task:
             raise ValueError("Tarefa não encontrada")
 
-        source_url = task.get("source_url")
-        source_type = task.get("source_type")
         metadata = await self._load_task_source_settings(task_id)
-        output_format = metadata.get("output_format", "vertical")
-        add_subtitles = metadata.get("add_subtitles", True)
-        webcam_region = metadata.get("webcam_region")
-        hook_intro = metadata.get("hook_intro")
         cleanup_payload = cleanup_settings or {
             "cut_long_pauses": metadata.get("cut_long_pauses"),
             "pause_threshold_ms": metadata.get("pause_threshold_ms"),
@@ -123,115 +121,83 @@ class ClipEditingMixin:
             metadata.get("remove_filler_words"),
             metadata.get("filtered_words"),
         )
+        # The route saves the new cleanup settings before the job runs, so it
+        # tells the job whether they changed.
         should_recompute_cleanup = (
-            cleanup_settings is not None
-            and normalized_cleanup_settings != existing_cleanup_settings
+            recompute_cleanup
+            if recompute_cleanup is not None
+            else cleanup_settings is not None and normalized_cleanup_settings != existing_cleanup_settings
         )
-
-        if not source_url or not source_type:
-            raise ValueError("O link de origem da tarefa está ausente; não é possível gerar os clipes de novo")
 
         clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
         if not clips:
-            return
-        if source_type == "live":
-            await self._regenerate_live_clips(
-                task_id, clips, font_family, font_size, font_color, caption_template,
-                metadata, normalized_cleanup_settings,
-            )
-            return
+            return {"done": 0, "failed": 0}
+        # Close the reading transaction before the long work.
+        if self.db is not None:
+            await self.db.commit()
 
-        video_path: Path
-        if source_type == "youtube":
-            downloaded = await self.video_service.download_video(source_url)
-            if not downloaded:
-                raise ValueError("Não foi possível baixar o vídeo original para gerar o clipe de novo")
-            video_path = Path(downloaded)
-        else:
-            video_path = await run_in_thread(self.video_service.resolve_local_video_path, source_url)
-            if not video_path.exists():
-                raise ValueError("O arquivo do vídeo original não existe mais")
-
+        clip_source = await self._clip_source_for_task(task)
+        output_dir = Path(self.config.temp_dir) / "clips"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        done = failed = 0
         try:
-            segments = []
-            for clip in clips:
-                source_ranges = await run_in_thread(self._get_clip_source_ranges, clip)
-                bounds = source_range_bounds(source_ranges)
-                if bounds:
-                    start_time = self._seconds_to_mmss(bounds[0])
-                    end_time = self._seconds_to_mmss(bounds[1])
+            for index, clip in enumerate(clips):
+                if progress_callback:
+                    await progress_callback(index, len(clips))
+                ranges = await run_in_thread(self._get_clip_source_ranges, clip)
+                segment = segment_from_clip(clip, ranges)
+                if should_recompute_cleanup:
+                    segment["source_ranges"] = ranges
                 else:
-                    start_time = clip["start_time"]
-                    end_time = clip["end_time"]
-
-                segments.append(
-                    {
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        **(
-                            {"source_ranges": source_ranges}
-                            if should_recompute_cleanup
-                            else {"keep_ranges": source_ranges}
-                        ),
-                        "text": clip.get("text") or "",
-                        "relevance_score": clip.get("relevance_score", 0.5),
-                        "reasoning": clip.get("reasoning")
-                        or "Regenerated with updated settings",
-                        "virality_score": clip.get("virality_score", 0),
-                        "hook_score": clip.get("hook_score", 0),
-                        "engagement_score": clip.get("engagement_score", 0),
-                        "value_score": clip.get("value_score", 0),
-                        "shareability_score": clip.get("shareability_score", 0),
-                        "hook_type": clip.get("hook_type"),
-                        "hook_title": clip.get("hook_title"),
-                    }
+                    segment["keep_ranges"] = ranges
+                info = await self.video_service.create_single_clip(
+                    clip_source.timing_path,
+                    segment,
+                    max(0, int(clip.get("clip_order") or index + 1) - 1),
+                    output_dir,
+                    font_family,
+                    font_size,
+                    font_color,
+                    caption_template,
+                    metadata.get("output_format", "vertical"),
+                    metadata.get("add_subtitles", True),
+                    normalized_cleanup_settings,
+                    webcam_region=metadata.get("webcam_region"),
+                    hook_intro=metadata.get("hook_intro"),
+                    clip_source=clip_source,
                 )
-
-            clips_info = await self.video_service.create_video_clips(
-                video_path,
-                segments,
-                font_family,
-                font_size,
-                font_color,
-                caption_template,
-                output_format,
-                add_subtitles,
-                normalized_cleanup_settings,
-                webcam_region=webcam_region,
-                hook_intro=hook_intro,
-            )
+                if not info:
+                    failed += 1
+                    logger.warning("Regenerating clip %s of task %s failed; it keeps its old version", clip["id"], task_id)
+                    continue
+                async with edit_transaction.task_edit_transaction(self.db, task_id, processing=True):
+                    await self.clip_repo.update_clip(
+                        self.db, clip["id"], info["filename"], info["path"], info["start_time"],
+                        info["end_time"], info["duration"], info.get("text") or clip.get("text") or "",
+                    )
+                done += 1
         finally:
-            if source_type == "youtube":
-                self._cleanup_source_video(video_path, source_type, source_url)
+            await run_in_thread(clip_source.close)
+        return {"done": done, "failed": failed}
 
-        await self.clip_repo.delete_clips_by_task(self.db, task_id)
 
-        clip_ids = []
-        for i, clip_info in enumerate(clips_info):
-            clip_id = await self.clip_repo.create_clip(
-                self.db,
-                task_id=task_id,
-                filename=clip_info["filename"],
-                file_path=clip_info["path"],
-                start_time=clip_info["start_time"],
-                end_time=clip_info["end_time"],
-                duration=clip_info["duration"],
-                text=clip_info.get("text") or "",
-                relevance_score=clip_info.get("relevance_score", 0.5),
-                reasoning=clip_info.get("reasoning")
-                or "Regenerated with updated settings",
-                clip_order=i + 1,
-                virality_score=clip_info.get("virality_score", 0),
-                hook_score=clip_info.get("hook_score", 0),
-                engagement_score=clip_info.get("engagement_score", 0),
-                value_score=clip_info.get("value_score", 0),
-                shareability_score=clip_info.get("shareability_score", 0),
-                hook_type=clip_info.get("hook_type"),
-                hook_title=clip_info.get("hook_title"),
-            )
-            clip_ids.append(clip_id)
+    @serialized_task_edit
+    async def start_clip_regeneration(self, task_id: str, settings: Dict[str, Any]) -> bool:
+        """Mark the task "processing" and queue the job that remakes its clips.
 
-        await self.task_repo.update_task_clips(self.db, task_id, clip_ids)
+        False when the task has no clips (nothing to remake).
+        """
+        from ..workers.job_queue import JobQueue
+
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task or not await self.clip_repo.get_clips_by_task(self.db, task_id):
+            return False
+        await self.task_repo.update_task_status(
+            self.db, task_id, "processing", progress=0, progress_message=REGENERATION_MESSAGE
+        )
+        # Inside the edit: if queueing fails, the status change rolls back with it.
+        await JobQueue.enqueue_job("regenerate_task_clips", task_id, task.get("status") or "completed", settings)
+        return True
 
 
     @serialized_task_edit
@@ -596,37 +562,6 @@ class ClipEditingMixin:
                 ) if part
             ),
         }
-
-    async def _regenerate_live_clips(
-        self, task_id, clips, font_family, font_size, font_color, caption_template,
-        metadata: Dict[str, Any], cleanup_settings: Dict[str, Any],
-    ) -> None:
-        """Render a live's clips again from their archived minutes, keeping each cut."""
-        from ..clip_review import segment_from_clip
-        from ..live.archive import LiveClipSource
-
-        source = LiveClipSource(task_id)
-        output_dir = Path(self.config.temp_dir) / "clips"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for clip in clips:
-            ranges = await run_in_thread(self._get_clip_source_ranges, clip)
-            segment = {**segment_from_clip(clip, ranges), "keep_ranges": ranges}
-            info = await self.video_service.create_single_clip(
-                source.timing_path, segment, max(0, int(clip.get("clip_order") or 1) - 1), output_dir,
-                font_family, font_size, font_color, caption_template,
-                metadata.get("output_format", "vertical"), metadata.get("add_subtitles", True),
-                cleanup_settings, webcam_region=metadata.get("webcam_region"),
-                hook_intro=metadata.get("hook_intro"), clip_source=source,
-            )
-            if not info:
-                raise ValueError(
-                    f"Não foi possível refazer o clipe {clip.get('clip_order')}. "
-                    "O trecho dele pode não estar mais guardado."
-                )
-            await self.clip_repo.update_clip(
-                self.db, clip["id"], info["filename"], info["path"], info["start_time"],
-                info["end_time"], info["duration"], info.get("text") or clip.get("text") or "",
-            )
 
     async def _clip_source_for_task(self, task: Dict[str, Any]) -> "ClipSource":
         """Where a finished task's clips take their picture from when re-rendered."""

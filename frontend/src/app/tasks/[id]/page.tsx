@@ -54,6 +54,7 @@ import {
   X,
   Youtube,
 } from "lucide-react";
+import { KortesLoading } from "@/components/kortes-loader";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import Link from "next/link";
 import { ClipTile, ClipFocus, ProcessingPanel, EmptyState } from "@/components/app/clip-wall";
@@ -521,9 +522,11 @@ export default function TaskPage() {
         toast.error(await buildSupportError(response, "Falha ao aplicar configurações"));
         return;
       }
+      const result = await response.json().catch(() => null);
       await fetchTaskStatus();
       setSettingsSheetOpen(false);
-      toast.success("Configurações aplicadas a todos os clipes");
+      // The clips are remade one by one in the background; the page shows the progress.
+      toast.success(result?.regenerating ? "Refazendo os clipes. O andamento aparece aqui." : "Configurações salvas");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Falha ao aplicar configurações");
     } finally {
@@ -813,7 +816,7 @@ export default function TaskPage() {
             )}
           </div>
         ) : !task ? (
-          <div className="flex min-h-[50vh] items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+          <KortesLoading className="min-h-[50vh]" size={72} />
         ) : task.status === "cancelled" && clips.length === 0 ? (
           <EmptyState icon={<PauseCircle className="size-7" />} title="Geração cancelada" body="Retome esta geração quando estiver pronto para continuar." />
         ) : task.status === "error" ? (

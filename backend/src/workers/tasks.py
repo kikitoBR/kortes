@@ -138,6 +138,76 @@ async def process_video_task(
             raise
 
 
+async def regenerate_task_clips(
+    ctx: Dict[str, Any], task_id: str, previous_status: str, settings: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Remake every clip of a finished task with new styling ("apply to all").
+
+    The task is "processing" while it runs; at the end it goes back to the
+    status it had. A clip that fails keeps its previous version.
+    """
+    from ..database import AsyncSessionLocal
+    from ..repositories.edit_transaction import TaskCancelled
+    from ..runtime_settings import load_runtime_settings_cache
+    from ..services.task_service import TaskService
+    from ..workers.progress import ProgressTracker
+
+    set_trace_id(f"task-{task_id}")
+    progress = ProgressTracker(ctx["redis"], task_id)
+    final_status = previous_status if previous_status in ("completed", "error", "cancelled") else "completed"
+
+    async with AsyncSessionLocal() as db:
+        await load_runtime_settings_cache(db)
+        service = TaskService(db)
+
+        async def report(index: int, total: int) -> None:
+            percent = int(100 * index / max(1, total))
+            message = f"Refazendo o clipe {index + 1} de {total}…"
+            await service.task_repo.update_task_status(
+                db, task_id, "processing", progress=percent, progress_message=message,
+                expected_statuses=["processing"],
+            )
+            await progress.update(percent, message)
+
+        async def finish(message: str) -> None:
+            await service.task_repo.update_task_status(
+                db, task_id, final_status, progress=100, progress_message=message,
+                expected_statuses=["processing"],
+            )
+            await progress.update(100, message, final_status)
+
+        try:
+            result = await service.regenerate_all_clips_for_task(
+                task_id,
+                settings.get("font_family"),
+                settings.get("font_size"),
+                settings.get("font_color"),
+                settings.get("caption_template") or "default",
+                cleanup_settings=settings.get("cleanup_settings"),
+                recompute_cleanup=settings.get("recompute_cleanup"),
+                progress_callback=report,
+            )
+        except TaskCancelled:
+            logger.info("Clip regeneration for task %s stopped: the task was cancelled", task_id)
+            return {"task_id": task_id, "cancelled": True}
+        except Exception as exc:
+            logger.error("Clip regeneration for task %s failed: %s", task_id, exc, exc_info=True)
+            await db.rollback()
+            await finish(
+                "Não deu para refazer os clipes. Eles continuam como estavam; tente aplicar de novo."
+            )
+            return {"task_id": task_id, "error": str(exc)}
+
+        failed = result["failed"]
+        await finish(
+            "Clipes refeitos com as novas configurações."
+            + (f" {failed} não deu certo e ficou como estava." if failed == 1 else "")
+            + (f" {failed} não deram certo e ficaram como estavam." if failed > 1 else "")
+        )
+        logger.info("Regenerated %s clips of task %s (%s failed)", result["done"], task_id, failed)
+        return {"task_id": task_id, **result}
+
+
 async def purge_live_archives(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Cron: drop finished lives' clip minutes after LIVE_ARCHIVE_DAYS."""
     from ..live.archive import purge_expired_live_archives
@@ -225,6 +295,8 @@ class WorkerSettings:
     # Functions to run
     functions = [
         process_video_task,
+        # Closing the app mid-way reruns it on the next start (from the first clip).
+        regenerate_task_clips,
         prepare_editor,
         export_editor,
         combine_editor,

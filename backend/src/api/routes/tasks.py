@@ -7,6 +7,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, RedirectResponse
 from starlette.background import BackgroundTask
 from ...media_storage import MediaStorage, is_s3, media_work
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from pathlib import Path
@@ -952,6 +954,9 @@ async def update_task(
         raise HTTPException(status_code=500, detail=f"Erro ao atualizar a tarefa: {str(e)}")
 
 
+DELETE_LOCK_WAIT = "5s"
+
+
 @router.delete("/{task_id}")
 async def delete_task(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
@@ -971,9 +976,22 @@ async def delete_task(
                 status_code=403, detail="Sem permissão para excluir esta tarefa"
             )
 
-        # Delete clips and task
+        # Delete clips and task. An edit that re-renders every clip ("apply to
+        # all") holds the task's row lock for minutes; wait briefly, then say so
+        # instead of leaving the delete spinning until it ends.
+        await db.execute(text(f"SET LOCAL lock_timeout = '{DELETE_LOCK_WAIT}'"))
         try:
             await task_service.delete_task(task_id)
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) == "55P03":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Os clipes desta geração estão sendo refeitos agora. "
+                        "Espere terminar e exclua de novo."
+                    ),
+                ) from exc
+            raise
         except ValueError:
             # A concurrent delete (double click, second tab) removed the row
             # while this request waited for its lock: the goal is already met.
@@ -1293,8 +1311,18 @@ async def apply_task_settings(
             font_color,
             caption_template,
             include_broll,
-            apply_to_existing,
-            cleanup_settings,
+        )
+        # Whether the pause/filler cleanup changed, decided before it is saved below.
+        recompute_cleanup = normalize_clip_cleanup_settings(
+            cleanup_settings.get("cut_long_pauses"),
+            cleanup_settings.get("pause_threshold_ms"),
+            cleanup_settings.get("remove_filler_words"),
+            cleanup_settings.get("filtered_words"),
+        ) != normalize_clip_cleanup_settings(
+            metadata.get("cut_long_pauses"),
+            metadata.get("pause_threshold_ms"),
+            metadata.get("remove_filler_words"),
+            metadata.get("filtered_words"),
         )
         # Settings edits must not write the job ID captured before a lengthy
         # regeneration: a concurrent resume may have reserved a newer attempt.
@@ -1315,7 +1343,28 @@ async def apply_task_settings(
             ),
             db=db,
         )
-        return {"task": task, "message": "Configurações da tarefa atualizadas"}
+        regenerating = False
+        if apply_to_existing:
+            # Remaking every clip takes minutes on a long video: a worker job does
+            # it clip by clip and the page follows its progress.
+            regenerating = await task_service.start_clip_regeneration(
+                task_id,
+                {
+                    "font_family": font_family,
+                    "font_size": font_size,
+                    "font_color": font_color,
+                    "caption_template": caption_template,
+                    "cleanup_settings": cleanup_settings,
+                    "recompute_cleanup": recompute_cleanup,
+                },
+            )
+            if regenerating:
+                task = await task_service.get_task_with_clips(task_id) or task
+        return {
+            "task": task,
+            "regenerating": regenerating,
+            "message": "Refazendo os clipes" if regenerating else "Configurações da tarefa atualizadas",
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:

@@ -21,6 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
+import { KortesLoader } from "@/components/kortes-loader";
 import { Captions, Check, ChevronDown, Clapperboard, Crop, Film, Loader2, ScanSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getClipUrl } from "@/lib/clip-actions";
@@ -808,7 +809,7 @@ function Phone({ clip, canvasRef, finalRef, boxRef }: {
         <canvas ref={canvasRef} width={PHONE_W} height={PHONE_H} className="size-full" aria-label="Prévia do corte com o layout e as legendas" />
       ) : (
         <div className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center text-sm text-stone-400">
-          <Loader2 className="size-5 animate-spin" />
+          <KortesLoader size={48} className="text-stone-100" />
           {clip.stage === "trecho"
             ? "Baixando os minutos deste corte…"
             : clip.stage === "momento"

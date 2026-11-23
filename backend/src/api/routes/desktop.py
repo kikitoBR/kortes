@@ -42,8 +42,6 @@ def _license_payload(info) -> dict:
         "name": info.name,
         "status": info.status,
         "expires_at": info.expires_at,
-        "monthly_tokens": info.monthly_tokens,
-        "used_tokens": info.used_tokens,
         "devices": info.devices,
         "max_devices": info.max_devices,
     }
@@ -118,7 +116,7 @@ async def remove_assemblyai(request: Request, db: AsyncSession = Depends(get_db)
 # Support and "Novidades": relayed to the Kortes site with this PC's license.
 
 _announcements_cache: dict = {"until": 0.0, "items": []}
-ANNOUNCEMENTS_CACHE_SECONDS = 300
+ANNOUNCEMENTS_CACHE_SECONDS = 60
 
 
 @router.get("/announcements")

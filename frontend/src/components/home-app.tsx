@@ -18,6 +18,7 @@ import { SubscriptionCancelBanner } from "@/components/subscription-cancel-banne
 import { UpgradeDialog, UpgradeNudge, getUpgradeState, upgradeReasonForError, type UpgradeReason } from "@/components/billing/upgrade-prompt";
 import { getPublicBillingPlans } from "@/lib/billing-plans";
 import { Skeleton } from "@/components/ui/skeleton";
+import { KortesLoading } from "@/components/kortes-loader";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -370,12 +371,7 @@ export default function HomeApp() {
 
   if (isPending || !session?.user) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="w-full max-w-2xl space-y-4">
-          <Skeleton className="mx-auto h-9 w-64" />
-          <Skeleton className="h-36 w-full rounded-2xl" />
-        </div>
-      </div>
+      <KortesLoading className="min-h-screen p-4" size={72} />
     );
   }
 

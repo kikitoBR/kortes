@@ -204,11 +204,13 @@ class VideoService:
         video_path: Path,
         processing_mode: str = "balanced",
         source_url: Optional[str] = None,
+        on_progress: Optional[Callable[[float], Awaitable[None]]] = None,
     ) -> str:
         """
         Generate transcript from video using the configured provider
         (assemblyai, whisper, or youtube_captions).
-        Runs in thread pool to avoid blocking.
+        Runs in thread pool to avoid blocking. ``on_progress`` gets the share
+        done (0-1) while local Whisper works (other providers do not report it).
         """
         logger.info(f"Generating transcript for: {video_path}")
         speech_model = "best"
@@ -218,8 +220,20 @@ class VideoService:
         if processing_mode == "fast" and runtime_config.transcription_provider == "assemblyai":
             speech_model = runtime_config.fast_mode_transcript_model
 
+        thread_progress = None
+        if on_progress:
+            loop = asyncio.get_running_loop()
+            last = {"share": -1.0}
+
+            def thread_progress(share: float) -> None:
+                # Whisper calls this per 30 s window; send a step every 2%.
+                if share - last["share"] < 0.02 and share < 1.0:
+                    return
+                last["share"] = share
+                asyncio.run_coroutine_threadsafe(on_progress(share), loop)
+
         transcript = await run_in_thread(
-            get_video_transcript, video_path, speech_model, source_url
+            get_video_transcript, video_path, speech_model, source_url, thread_progress
         )
         logger.info(f"Transcript generated: {len(transcript)} characters")
         return transcript
@@ -593,10 +607,19 @@ class VideoService:
                 and not (load_cached_transcript_data(video_path) or {}).get("words")
             )
             if not transcript or needs_word_timings:
+                async def transcription_progress(share: float) -> None:
+                    if progress_callback:
+                        await progress_callback(
+                            30 + int(share * 15),
+                            f"Gerando a transcrição... {int(share * 100)}%",
+                            "processing",
+                        )
+
                 transcript = await VideoService.generate_transcript(
                     video_path,
                     processing_mode=processing_mode,
                     source_url=url if source_type == "youtube" else None,
+                    on_progress=transcription_progress,
                 )
 
             # Facts kept beside the word timings: later edits time clips from

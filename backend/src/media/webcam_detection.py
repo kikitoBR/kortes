@@ -37,6 +37,8 @@ MOTION_WINDOW = 4
 MOTION_JUMP_MIN = 8.0
 # A nearer jump at least this share of the biggest one is the webcam border.
 NEAREST_JUMP_SHARE = 0.5
+# A webcam box narrower than this width/height is suspicious (see webcam_edges).
+WEBCAM_MIN_ASPECT = 1.2
 # A face wider than this share of the frame means the whole video is the
 # camera (a podcast/talking head), not a webcam overlay.
 FULL_CAMERA_FACE_WIDTH = 0.2
@@ -136,6 +138,7 @@ def webcam_edges(
     full_rows[1:-1] = np.median(
         np.abs(grays[:, 2:, :] - grays[:, :-2, :]).mean(axis=2), axis=0
     )
+    local_row_strength = row_strength.copy()
     column_strength = np.where(full_columns >= column_strength * 0.6, 0.0, column_strength)
     row_strength = np.where(full_rows >= row_strength * 0.6, 0.0, row_strength)
 
@@ -217,6 +220,23 @@ def webcam_edges(
     # The face usually sits right under the top of the webcam.
     top = side(fy - 0.05 * fh, max(1, fy - 4 * fh), row_strength, row_motion, by, 0)
     bottom = side(fy + 1.4 * fh, min(h - 2, fy + 6 * fh), row_strength, row_motion, by + bh, h)
+
+    # A streamer moving under their face (arms, standing up) or a still stretch
+    # of game below can push the bottom far past the webcam. Webcams are wider
+    # than tall (4:3 to 16:9): when the box comes out nearly square or taller,
+    # take the steady line where a webcam of that width would end.
+    width_found = right - left
+    if width_found > 0 and (bottom - top) * WEBCAM_MIN_ASPECT > width_found:
+        ks = [
+            k for k in range(int(top + width_found / 1.85), int(top + width_found / 1.25) + 1)
+            if fy + 1.2 * fh <= k < h
+        ]
+        if ks:
+            # Unfiltered: in this narrow window a line the game row also has is
+            # still the webcam's edge.
+            best = max(ks, key=lambda k: local_row_strength[k])
+            if local_row_strength[best] > EDGE_MIN_STRENGTH:
+                bottom = float(best)
     return (left, top, right - left, bottom - top), sides_found
 
 

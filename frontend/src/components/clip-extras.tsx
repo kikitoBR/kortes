@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, Download, ImageIcon, Loader2, RefreshCw, Sparkles, Wand2 } from "lucide-react";
+import { KortesLoader } from "@/components/kortes-loader";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -122,7 +123,7 @@ export function ClipCoverButton({ taskId, clip }: { taskId: string; clip: ExtraC
               ) : null}
               {(suggesting || imageLoading) && (
                 <div className="absolute inset-0 grid place-items-center bg-background/40">
-                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                  <KortesLoader size={48} />
                 </div>
               )}
             </div>
@@ -289,7 +290,7 @@ export function ClipPostTextsButton({ taskId, clip }: { taskId: string; clip: Ex
 
           {loading && !texts ? (
             <div className="grid place-items-center py-10 text-sm text-muted-foreground">
-              <Loader2 className="mb-2 size-6 animate-spin" />
+              <KortesLoader size={48} className="mb-2 text-foreground" />
               Escrevendo os textos…
             </div>
           ) : texts ? (

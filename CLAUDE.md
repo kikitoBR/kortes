@@ -145,6 +145,15 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   The site is `site/` (Next.js on Vercel, Postgres): `/api/v1/*` for the app, `/painel` (password
   `ADMIN_PASSWORD`) to answer messages and publish announcements. See `site/README.md`.
 - Videos up to 10 h (`MAX_VIDEO_DURATION` defaults to 36000 in desktop mode).
+- AI calls get twice their time budget (`AI_TIMEOUT_SCALE`, default 2 in desktop): the license server answers slower
+  than a provider. Its refusals (`code` in the OpenAI-shaped error) are not retried: `quota_exceeded` shows a
+  neutral "IA indisponível, fale com o suporte" (customers never see the quota), blocked/expired/device-limit
+  licenses show the server's message (`ai._license_refusal`). The license card shows no usage.
+- Local Whisper reports its progress ("Gerando a transcrição... 42%"): a tqdm bar of ours inside `whisper.transcribe`
+  hands the share done to the transcribing thread's callback (`media/transcription._install_whisper_progress_bar`).
+- Loading states use the animated Kortes scissors (`components/kortes-loader.tsx`, CSS `.kortes-loader` in
+  `globals.css`; the Electron splash has its own copy in `desktop/src/main.js`). "Novidades" stays in the sidebar
+  even with no announcements.
 - **Try it:** `docker compose -p kortes-desktop -f docker-compose.yml -f docker-compose.desktop.yml up -d --build
   postgres redis backend worker frontend` → http://localhost:3207 (own containers, ports, network and volumes).
 
@@ -354,6 +363,12 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
   `camPosition`, `background: "blur"`).
 - `vertical_gameplay` stacks the streamer's webcam (1080x768) over a centre cut of the game (1080x1152). The webcam comes from the user's box (`webcam_region`, 0-1 fractions) or `media/webcam_detection.py` (steady face across ~24 frames, then borders at the first strong jump in per-pixel motion walking out from the face, from the static room to the moving game, so HUD text farther away is not taken for the border; ported from SHARINGAN, MIT). The webcam crop centres the streamer's face across (and keeps it 35-60% down), zooming into the box down to 70% when the face sits off-centre (`gameplay_regions_from_box(face=...)`; a hand-picked box looks for the steady face inside it). A webcam against the side of the frame, with only still room beside the face, reaches that side (no shelf line taken for its border). Letterbox bars are trimmed from the game crop via cropdetect. The clip editor keeps this layout: `Framing.layout = "gameplay"` + a `webcam` box (`editor_document.py`, `frontend/src/lib/editor/document.ts`; preview, browser export and server export share the same cut math), seeded at prepare time by `gameplay_framing()` in `editor_service.py` from the same planner
 - "Ganho inicial" (`hook_intro` per task; omitted = `HOOK_FIRST_TEASER` with a hard cut): the AI hook line plays first, then a 0.5 s tape-rewind beat (`media/hook_rewind.py`) paints over a placeholder range appended to the teaser, so durations, captions and source maps stay in sync (`timeline.hook_rewind_point`)
+- "Aplicar a todos" (`POST /tasks/{id}/settings` with `apply_to_existing`) saves the styling, sets the task
+  "processing" and queues `regenerate_task_clips` on the worker: each clip is rendered again from its section
+  (`ClipSource`, like the editor), keeping its id, moment and title, and saved in its own short transaction
+  (the DB drops transactions idle for 5 min, `idle_in_transaction_session_timeout`). The page follows it
+  ("Refazendo o clipe 3 de 10…"); at the end the task gets its previous status back. A clip that fails keeps its
+  old version. Deleting a task waits at most 5 s for its row lock, then answers 409.
 - "Ajustar com IA": `POST /tasks/{id}/clips/{clip_id}/adjust` `{"instructions": "começa 3 s antes"}` → `ai.adjust_clip` returns new bounds/title/teaser (validated in `clip_review.apply_adjustment`, 15 s-3 min) and the clip is rendered again from the source (`ClipEditingMixin.adjust_clip_with_text`)
 - Assembly show ("Bastidores", `components/app/assembly-show.tsx`): the clip really being made, like an editor. The
   render reports each stage through `ShowReporter` (`src/show.py`; Redis `show:{task}` + SSE `show`, read on page

@@ -119,6 +119,14 @@ MIN_FINAL_CLIPS = 5
 MAX_FINAL_CLIPS = 20
 SECONDS_PER_FINAL_CLIP = 5 * 60
 TRANSIENT_MODEL_STATUS_CODES = {408, 429, 500, 502, 503, 504, 529}
+# Kortes Desktop reaches the model through the license server, which answers
+# slower than a provider's API: each call gets this many times its budget.
+AI_TIMEOUT_SCALE = float(
+    env_or_default(
+        "AI_TIMEOUT_SCALE",
+        "2" if (os.getenv("KORTES_EDITION") or "").strip().lower() == "desktop" else "1",
+    )
+)
 HOOK_TITLE_MAX_CHARS = 64
 HOOK_TITLE_MAX_WORDS = 10
 # The transcript formatter does not wrap minutes into hours, so sources of 100+
@@ -1163,6 +1171,35 @@ def _is_transient_model_error(error: Exception) -> bool:
     return False
 
 
+# Refusals from the Kortes license server (OpenAI error shape, ``code``) that
+# no retry fixes. The quota stays out of sight: the customer only learns the
+# AI is unavailable and where to get help.
+LICENSE_UNAVAILABLE_MESSAGE = (
+    "A IA do Kortes está indisponível no momento. Tente novamente mais tarde; "
+    "se continuar, fale com o suporte pelo botão de mensagens."
+)
+LICENSE_REFUSALS_WITH_MESSAGE = {"license_blocked", "license_expired", "device_limit", "invalid_license"}
+
+
+def _license_refusal(error: BaseException) -> Optional[str]:
+    """The message to show for a license-server refusal, or None for other errors."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ModelHTTPError):
+            body = current.body if isinstance(current.body, dict) else {}
+            detail = body.get("error") if isinstance(body.get("error"), dict) else body
+            code = detail.get("code") if isinstance(detail, dict) else None
+            if code == "quota_exceeded":
+                return LICENSE_UNAVAILABLE_MESSAGE
+            if code in LICENSE_REFUSALS_WITH_MESSAGE:
+                return str(detail.get("message") or LICENSE_UNAVAILABLE_MESSAGE)
+            return None
+        current = current.__cause__
+    return None
+
+
 async def _run_transcript_analysis(
     agent: Agent,
     prompt: str,
@@ -1176,6 +1213,7 @@ async def _run_transcript_analysis(
     """
     if timeout_seconds is None:
         timeout_seconds = TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS
+    timeout_seconds = timeout_seconds * AI_TIMEOUT_SCALE
     try:
         async with asyncio.timeout(timeout_seconds):
             for attempt in range(1, TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS + 1):
@@ -1185,6 +1223,10 @@ async def _run_transcript_analysis(
                         logger.info("AI analysis completed using model %s", result.response.model_name)
                     return result
                 except Exception as error:
+                    refusal = _license_refusal(error)
+                    if refusal:
+                        logger.error("AI refused by the license server (HTTP %s)", getattr(error, "status_code", None))
+                        raise RuntimeError(refusal) from None
                     if not _is_transient_model_error(error):
                         raise
                     if attempt == TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS:
@@ -1455,7 +1497,9 @@ async def rerank_candidates(
     except Exception as error:
         # Do not log the error text: provider bodies may contain transcript data.
         logger.warning(
-            "Candidate rerank failed (%s); keeping first-pass order", type(error).__name__
+            "Candidate rerank failed (%s, HTTP status %s); keeping first-pass order",
+            type(error).__name__,
+            getattr(error, "status_code", None),
         )
         return candidates
     logger.info("Reranked %d clip candidates", len(reranked))

@@ -1,6 +1,9 @@
 """Transcription helpers for the video pipeline."""
 
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Callable
+import io
+import threading
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -198,13 +201,58 @@ def _get_whisper_model(model_name: str = "base"):
     return _WHISPER_MODEL_CACHE[model_name]
 
 
+# Whisper reports how far it got through a tqdm bar. A bar of our own reads it
+# and hands the share done to the callback of the thread transcribing (the
+# live worker runs several transcriptions at once, each with its own).
+_whisper_progress = threading.local()
+
+
+def _install_whisper_progress_bar() -> None:
+    try:
+        import importlib
+
+        # The module itself: ``whisper.transcribe`` is also the name of its function.
+        whisper_transcribe = importlib.import_module("whisper.transcribe")
+    except Exception:
+        return
+    base = whisper_transcribe.tqdm.tqdm
+    if getattr(base, "_kortes_progress", False):
+        return
+
+    class ProgressBar(base):  # type: ignore[misc, valid-type]
+        _kortes_progress = True
+
+        def __init__(self, *args, **kwargs):
+            self._on_progress = getattr(_whisper_progress, "callback", None)
+            if self._on_progress:
+                # Count frames even when Whisper hides its bar, without printing it.
+                kwargs["disable"] = False
+                kwargs["file"] = io.StringIO()
+            super().__init__(*args, **kwargs)
+
+        def update(self, n=1):
+            result = super().update(n)
+            if self._on_progress and self.total:
+                try:
+                    self._on_progress(min(1.0, self.n / self.total))
+                except Exception:
+                    logger.debug("Whisper progress callback failed", exc_info=True)
+            return result
+
+    whisper_transcribe.tqdm = SimpleNamespace(tqdm=ProgressBar)
+
+
 def transcribe_with_whisper(
-    video_path: Path, model_name: str = "base", language: Optional[str] = None
+    video_path: Path,
+    model_name: str = "base",
+    language: Optional[str] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
 ) -> Dict[str, Any]:
     """Transcribe video using local Whisper with word-level timestamps.
 
     ``language`` None lets Whisper detect it; AssemblyAI-style codes such as
     ``en_us`` are reduced to the ISO 639-1 base Whisper expects.
+    ``on_progress`` gets the share of the audio done (0-1) as Whisper goes.
     """
     audio_path = _prepare_audio_for_transcription(video_path)
     model = _get_whisper_model(model_name)
@@ -214,7 +262,13 @@ def transcribe_with_whisper(
         model_name,
         whisper_language or "auto",
     )
-    return model.transcribe(str(audio_path), word_timestamps=True, language=whisper_language)
+    if on_progress:
+        _install_whisper_progress_bar()
+    _whisper_progress.callback = on_progress
+    try:
+        return model.transcribe(str(audio_path), word_timestamps=True, language=whisper_language)
+    finally:
+        _whisper_progress.callback = None
 
 
 def _whisper_result_to_transcript_data(whisper_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -334,6 +388,7 @@ def get_video_transcript(
     video_path: Path,
     speech_model: str = "universal",
     source_url: Optional[str] = None,
+    on_progress: Optional[Callable[[float], None]] = None,
 ) -> str:
     """Get a video transcript using the configured provider.
 
@@ -346,7 +401,7 @@ def get_video_transcript(
     provider = runtime_config.transcription_provider
 
     if provider == "whisper":
-        return _get_transcript_with_whisper(video_path, runtime_config)
+        return _get_transcript_with_whisper(video_path, runtime_config, on_progress)
     if provider == "youtube_captions":
         if not source_url:
             raise ValueError(
@@ -359,12 +414,12 @@ def get_video_transcript(
         # Whisper when there is none or it fails (no credit, revoked, offline).
         if not runtime_config.assembly_ai_api_key:
             logger.info("No AssemblyAI key: transcribing with local Whisper")
-            return _get_transcript_with_whisper(video_path, runtime_config)
+            return _get_transcript_with_whisper(video_path, runtime_config, on_progress)
         try:
             return _get_transcript_with_assemblyai(video_path, speech_model, runtime_config)
         except Exception as exc:
             logger.warning("AssemblyAI failed (%s); transcribing with local Whisper instead", exc)
-            return _get_transcript_with_whisper(video_path, runtime_config)
+            return _get_transcript_with_whisper(video_path, runtime_config, on_progress)
     return _get_transcript_with_assemblyai(video_path, speech_model, runtime_config)
 
 
@@ -457,12 +512,12 @@ def _get_transcript_with_assemblyai(
         raise
 
 
-def _get_transcript_with_whisper(video_path: Path, runtime_config) -> str:
+def _get_transcript_with_whisper(video_path: Path, runtime_config, on_progress=None) -> str:
     """Get transcript using local Whisper with word-level timestamps."""
     model_name = runtime_config.whisper_model
     logger.info("Starting Whisper transcription with model: %s", model_name)
     whisper_result = transcribe_with_whisper(
-        video_path, model_name, runtime_config.transcription_language or None
+        video_path, model_name, runtime_config.transcription_language or None, on_progress
     )
 
     formatted_lines = format_transcript_for_analysis(whisper_result)

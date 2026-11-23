@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Loader2, MessageSquare, Plus } from "lucide-react";
+import { KortesLoader } from "@/components/kortes-loader";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -247,7 +248,7 @@ export function DesktopSupport() {
                 <Plus className="size-4" /> Nova mensagem
               </Button>
               {error && <p className="text-sm text-destructive">{error}</p>}
-              {threads === null && !error && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+              {threads === null && !error && <KortesLoader size={48} className="mx-auto" />}
               {threads?.length === 0 && (
                 <p className="py-6 text-center text-sm text-muted-foreground">
                   Nenhuma conversa ainda. Dúvidas, erros e sugestões são bem-vindos.

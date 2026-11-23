@@ -90,3 +90,24 @@ def test_webcam_against_the_frame_side_reaches_it_past_the_shelves():
     (x, y, w, h), _ = wd.webcam_edges(np.stack(frames), face, wd.box_around_face(face, 640, 360))
     assert x == 0
     assert abs((x + w) - 200) <= 2
+
+
+def test_a_moving_streamer_does_not_stretch_the_webcam_into_a_still_game():
+    # Webcam x 0-200, y 60-180 (5:3). The streamer's body moves at its bottom;
+    # under it the game is still (a dark wall) down to y 280, where it moves.
+    # The motion jump at 280 is the game, not the webcam: the box would be taller
+    # than wide, so the steady line at 180 is its bottom.
+    rng = np.random.default_rng(9)
+    frames = []
+    for _ in range(24):
+        game = rng.uniform(0, 255, size=(360, 640)).astype(np.float32)
+        game = (game + np.roll(game, 1, axis=1) + np.roll(game, 1, axis=0)) / 3
+        game[60:180, 0:200] = 140.0
+        body = np.full((50, 120), 150.0 + rng.uniform(-6, 6), dtype=np.float32)  # sways a little
+        game[130:180, 40:160] = body
+        game[180:280, 0:300] = 20.0
+        frames.append(game)
+    face = (80.0, 70.0, 40.0, 40.0)
+    (x, y, w, h), _ = wd.webcam_edges(np.stack(frames), face, wd.box_around_face(face, 640, 360))
+    assert abs((y + h) - 180) <= 3
+    assert w / h > 1.2

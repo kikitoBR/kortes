@@ -73,27 +73,23 @@ async def test_editor_preparation_removes_its_download(tmp_path, monkeypatch, re
 
 
 @pytest.mark.parametrize("render_succeeds", [True, False])
-async def test_regeneration_removes_its_download(
+async def test_regeneration_closes_its_source(
     isolated_clip_edits, tmp_path, monkeypatch, render_succeeds
 ):
     config = Config()
     config.temp_dir = str(tmp_path)
-    monkeypatch.setattr("src.config.get_config", lambda: config)
-    monkeypatch.setattr("src.youtube_utils.get_config", lambda: config)
-    source = downloaded_source(tmp_path)
     clip = {"id": "clip", "task_id": "task", "file_path": str(tmp_path / "clip.mp4"),
             "start_time": "00:00", "end_time": "00:01", "text": "hello"}
     service = TaskService(db=None, config=config)
     service.task_repo.get_task_by_id = AsyncMock(return_value={"source_url": SOURCE_URL, "source_type": "youtube"})
-    service.task_repo.update_task_clips = AsyncMock()
     service.clip_repo.get_clips_by_task = AsyncMock(return_value=[clip])
-    service.clip_repo.delete_clips_by_task = AsyncMock()
-    service.clip_repo.create_clip = AsyncMock(return_value="clip")
     service._load_task_source_settings = AsyncMock(return_value={"output_format": "vertical", "add_subtitles": True})
-    service.video_service.download_video = AsyncMock(return_value=source)
-    service.video_service.create_video_clips = AsyncMock(
-        return_value=[] if render_succeeds else None,
-        side_effect=None if render_succeeds else RuntimeError("render failed"),
+    service._get_clip_source_ranges = lambda _clip: [(0.0, 1.0)]
+    source = SimpleNamespace(timing_path=tmp_path / "timing.mp4", close=lambda: closed.append(True))
+    closed: list = []
+    service._clip_source_for_task = AsyncMock(return_value=source)
+    service.video_service.create_single_clip = AsyncMock(
+        return_value=None, side_effect=None if render_succeeds else RuntimeError("render failed")
     )
 
     if render_succeeds:
@@ -102,8 +98,7 @@ async def test_regeneration_removes_its_download(
         with pytest.raises(RuntimeError, match="render failed"):
             await service.regenerate_all_clips_for_task("task", None, None, None, "default")
 
-    assert not source.exists()
-    assert not source.parent.exists()
+    assert closed == [True]
 
 
 @pytest.mark.parametrize("render_succeeds", [True, False])

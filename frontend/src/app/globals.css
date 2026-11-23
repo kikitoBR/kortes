@@ -180,6 +180,33 @@
   }
 }
 
+/* Kortes loader (components/kortes-loader.tsx): the scissors draw themselves,
+   snip once and fade out, every 1.4 s. */
+.kortes-loader .kl-wrap { transform-origin: 100px 100px; animation: kl-breathe 1.4s ease-in-out infinite; }
+.kortes-loader .kl-gray, .kortes-loader .kl-dark { transform-origin: 103.5px 86.1px; }
+.kortes-loader .kl-gray { animation: kl-cut-gray 1.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite; }
+.kortes-loader .kl-dark { animation: kl-cut-dark 1.4s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite; }
+.kortes-loader .kl-circle { stroke-dasharray: 160; animation: kl-trace-circle 1.4s ease-in-out infinite; }
+.kortes-loader .kl-stem { stroke-dasharray: 65; animation: kl-trace-stem 1.4s ease-in-out infinite; }
+.kortes-loader .kl-tip { stroke-dasharray: 36; animation: kl-trace-tip 1.4s ease-in-out infinite; }
+.kortes-loader .kl-blade { stroke-dasharray: 142; animation: kl-trace-blade 1.4s ease-in-out infinite; }
+@keyframes kl-breathe {
+  0%, 100% { transform: scale(0.96); opacity: 0.72; }
+  35%, 72% { transform: scale(1); opacity: 1; }
+  55% { transform: scale(1.025); opacity: 1; }
+}
+@keyframes kl-cut-gray { 0%, 38%, 78%, 100% { transform: rotate(0deg); } 56% { transform: rotate(-11deg); } }
+@keyframes kl-cut-dark { 0%, 38%, 78%, 100% { transform: rotate(0deg); } 56% { transform: rotate(11deg); } }
+@keyframes kl-trace-circle { 0% { stroke-dashoffset: 160; } 34%, 80% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -160; } }
+@keyframes kl-trace-stem { 0%, 8% { stroke-dashoffset: 65; } 36%, 80% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -65; } }
+@keyframes kl-trace-tip { 0%, 14% { stroke-dashoffset: 36; } 38%, 80% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -36; } }
+@keyframes kl-trace-blade { 0%, 10% { stroke-dashoffset: 142; } 36%, 80% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -142; } }
+@media (prefers-reduced-motion: reduce) {
+  /* Still a status: the drawn scissors breathe instead of drawing and cutting. */
+  .kortes-loader :not(.kl-wrap) { stroke-dashoffset: 0 !important; transform: none !important; animation: none !important; }
+  .kortes-loader .kl-wrap { animation: kl-breathe 1.4s ease-in-out infinite !important; }
+}
+
 /* App shell polish */
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(6px); }

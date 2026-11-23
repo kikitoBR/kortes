@@ -75,6 +75,7 @@ async def test_edits_serialize_before_reading_clip_state(
     monkeypatch.setattr("src.services.clip_service.merge_clip_files", lambda *_: render()[0])
     monkeypatch.setattr("src.services.clip_service.create_optimized_clip", lambda *_a, **_k: True)
     monkeypatch.setattr("src.services.clip_service.overlay_custom_captions", lambda *_a, **_k: render()[0])
+    monkeypatch.setattr("src.workers.job_queue.JobQueue.enqueue_job", AsyncMock(return_value="job"))
     async with sessions() as one, sessions() as two:
         first = TaskService(one, config=config_for(tmp_path))
         second = TaskService(two, config=config_for(tmp_path))
@@ -92,7 +93,8 @@ async def test_edits_serialize_before_reading_clip_state(
             "trim": lambda: second.trim_clip(task_id, ids[-1], .1, .1),
             "delete": lambda: second.delete_clip(task_id, ids[-1]),
             "merge": lambda: second.merge_clips(task_id, ids[:2]),
-            "regenerate": lambda: second.regenerate_all_clips_for_task(task_id, None, None, None, "default"),
+            # Starting "apply to all" waits for the edit too (the remake itself is a worker job).
+            "regenerate": lambda: second.start_clip_regeneration(task_id, {}),
             "captions": lambda: second.update_clip_captions(task_id, ids[-1], "edited", "bottom", []),
         }
         job_two = asyncio.create_task(actions[other_edit]())
@@ -104,7 +106,7 @@ async def test_edits_serialize_before_reading_clip_state(
         await asyncio.wait_for(asyncio.gather(job_one, job_two), 10)
 
     clips = await ClipRepository.get_clips_by_task(db_session, task_id)
-    expected_counts = {"split": 5, "trim": 4, "delete": 3, "merge": 3, "regenerate": 1, "captions": 4}
+    expected_counts = {"split": 5, "trim": 4, "delete": 3, "merge": 3, "regenerate": 4, "captions": 4}
     assert len(clips) == expected_counts[other_edit]
     assert [clip["clip_order"] for clip in clips] == list(range(1, len(clips) + 1))
     stored = await db_session.execute(text("SELECT generated_clips_ids FROM tasks WHERE id=:id"), {"id": task_id})

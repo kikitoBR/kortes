@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, Check, Loader2, Youtube, Upload } from "lucide-react";
+import { AlertTriangle, Check, Youtube, Upload } from "lucide-react";
+import { KortesLoader } from "@/components/kortes-loader";
 import { ClipCover, ScoreRing } from "@/components/app/clip-cover";
 import { StatusBadge, ACTIVE_TASK_STATUSES } from "@/components/app/status-badge";
 import { coverClipUrl, timeAgo, type GenerationSummary } from "@/lib/generations";
@@ -34,7 +35,7 @@ export function GenerationCard({ generation, selected, onToggle, selectionDisabl
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 to-black/20" />
           {active && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-stone-950/60 text-white">
-              <Loader2 className="size-5 animate-spin" aria-hidden />
+              <KortesLoader size={40} label={generation.status === "queued" ? "Na fila" : "Processando"} />
               <span className="text-xs font-medium">{generation.status === "queued" ? "Na fila" : "Buscando os melhores momentos…"}</span>
               <div className="progress-sheen relative mt-1 h-0.5 w-24 overflow-hidden rounded-full bg-white/20" />
             </div>

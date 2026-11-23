@@ -6,6 +6,7 @@ import { ArrowRight, ArrowUpRight, Megaphone, X } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAnnouncements } from "@/hooks/use-announcements";
+import { isDesktop } from "@/lib/edition";
 import { cn } from "@/lib/utils";
 
 const READ_EVENT = "supoclip:announcements-read";
@@ -49,10 +50,11 @@ export function Announcements({ userId, compact = false, landing = false }: {
     };
   }, [key]);
 
-  if (announcements.length === 0) return null;
+  // Kortes Desktop keeps "Novidades" in the sidebar even before the first notice.
+  if (announcements.length === 0 && (landing || !isDesktop)) return null;
 
   const unread = read?.key === key ? announcements.filter((item) => !read.ids.includes(item.id)).length : 0;
-  const label = landing ? announcements[0].title : "Novidades";
+  const label = landing && announcements[0] ? announcements[0].title : "Novidades";
   const accessibleLabel = `Novidades${unread ? `, ${unread} comunicado${unread === 1 ? "" : "s"} não lido${unread === 1 ? "" : "s"}` : ""}`;
 
   const changeOpen = (next: boolean) => {
@@ -99,10 +101,15 @@ export function Announcements({ userId, compact = false, landing = false }: {
           </button>
         </div>
         <div className="max-h-[min(28rem,60dvh)] divide-y overflow-y-auto">
+          {announcements.length === 0 && (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+              Nenhuma novidade por enquanto. Os avisos da equipe do Kortes aparecem aqui.
+            </p>
+          )}
           {announcements.map((item) => (
             <article key={item.id} className="space-y-2 p-4">
               <time dateTime={item.publishedAt} className="text-xs text-muted-foreground">
-                {new Date(item.publishedAt).toLocaleDateString("pt-BR", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}
+                {new Date(item.publishedAt).toLocaleDateString("pt-BR", { month: "short", day: "numeric", year: "numeric" })}
               </time>
               <h3 className="font-semibold leading-snug">{item.title}</h3>
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{item.description}</p>

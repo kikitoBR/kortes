@@ -1,6 +1,5 @@
-import { db } from "@/lib/db";
 import { deleteAnnouncement, saveAnnouncement } from "../actions";
-import { formatDate, Shell } from "../shell";
+import { formatDate, painelDb, SetupNotice, Shell } from "../shell";
 
 type Row = {
   id: string;
@@ -57,7 +56,8 @@ function AnnouncementForm({ item }: { item?: Row }) {
 
 export default async function Avisos({ searchParams }: { searchParams: Promise<{ erro?: string; ok?: string }> }) {
   const { erro, ok } = await searchParams;
-  const sql = await db();
+  const sql = await painelDb();
+  if (typeof sql === "string") return <Shell active="avisos"><SetupNotice message={sql} /></Shell>;
   const items = (await sql`SELECT * FROM announcements ORDER BY published_at DESC`) as unknown as Row[];
   const now = Date.now();
 

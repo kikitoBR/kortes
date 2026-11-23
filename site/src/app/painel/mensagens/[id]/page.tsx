@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
 import { CATEGORIES, STATUS_LABELS } from "@/lib/support";
 import { deleteThread, reply, setThreadStatus } from "../../actions";
-import { formatDate, Shell } from "../../shell";
+import { formatDate, painelDb, SetupNotice, Shell } from "../../shell";
 
 export default async function Conversa({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
-  const sql = await db();
+  const sql = await painelDb();
+  if (typeof sql === "string") return <Shell active="mensagens"><SetupNotice message={sql} /></Shell>;
   const [thread] = await sql`SELECT * FROM support_threads WHERE id = ${id}`;
   if (!thread) notFound();
   const messages = await sql`SELECT author, body, created_at FROM support_messages WHERE thread_id = ${id} ORDER BY created_at`;

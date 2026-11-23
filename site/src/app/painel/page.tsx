@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
 import { CATEGORIES, STATUS_LABELS } from "@/lib/support";
-import { formatDate, Shell } from "./shell";
+import { formatDate, painelDb, SetupNotice, Shell } from "./shell";
 
 const FILTERS = [
   { key: "open", label: "Aguardando você" },
@@ -13,7 +12,8 @@ const FILTERS = [
 export default async function Mensagens({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const { status: requested } = await searchParams;
   const status = FILTERS.some((f) => f.key === requested) ? requested! : "open";
-  const sql = await db();
+  const sql = await painelDb();
+  if (typeof sql === "string") return <Shell active="mensagens"><SetupNotice message={sql} /></Shell>;
   const threads = await sql`
     SELECT t.id, t.license_name, t.category, t.subject, t.status, t.updated_at,
       (SELECT count(*)::int FROM support_messages m WHERE m.thread_id = t.id) AS messages

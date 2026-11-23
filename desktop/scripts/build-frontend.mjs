@@ -36,7 +36,17 @@ function run(command, env = {}) {
 copySources();
 run("pnpm install --frozen-lockfile --config.node-linker=hoisted --ignore-workspace");
 run("pnpm exec prisma generate");
-run("pnpm exec next build", {
+// Next's file tracing (@vercel/nft) follows paths built from the home folder; on the
+// Windows release runner that folder holds protected WindowsApps entries and the
+// build stops on them. An empty home for the build leaves it nothing to scan there.
+const home = path.join(desktop, "build", "build-home");
+for (const dir of ["AppData/Local", "AppData/Roaming"]) fs.mkdirSync(path.join(home, dir), { recursive: true });
+// Next itself, through node (not pnpm, whose cache lives in the real AppData).
+run(`node "${path.join("node_modules", "next", "dist", "bin", "next")}" build`, {
+  USERPROFILE: home,
+  HOME: home,
+  LOCALAPPDATA: path.join(home, "AppData", "Local"),
+  APPDATA: path.join(home, "AppData", "Roaming"),
   NEXT_PUBLIC_KORTES_EDITION: "desktop",
   NEXT_PUBLIC_SELF_HOST: "true",
   NEXT_PUBLIC_APP_URL: "http://127.0.0.1",

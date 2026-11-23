@@ -3,3 +3,4 @@ runtime/
 build/app/
 dist/
 build/frontend-src/
+build/build-home/

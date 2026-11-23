@@ -52,6 +52,7 @@ function layout(app) {
     postgresBin: path.join(resources, "postgres", "bin"),
     redisServer: path.join(resources, "redis", "redis-server.exe"),
     ffmpegDir: path.join(resources, "ffmpeg", "bin"),
+    denoDir: path.join(resources, "deno"),
     machineId: machineId(),
   };
 

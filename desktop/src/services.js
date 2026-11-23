@@ -216,6 +216,7 @@ class Services {
     return {
       KORTES_EDITION: "desktop",
       KORTES_DATA_DIR: layout.dataDir,
+      LOG_DIR: path.join(layout.logsDir, "backend"),
       KORTES_DEVICE_ID: layout.machineId || "",
       KORTES_LICENSE_URL: process.env.KORTES_LICENSE_URL || "https://gemini.kikito.site/v1",
       DATABASE_URL: this.databaseUrl(secrets, "postgresql+asyncpg"),
@@ -234,7 +235,8 @@ class Services {
       WHISPER_MODEL_SIZE: process.env.KORTES_WHISPER_MODEL || "base",
       PYTHONUNBUFFERED: "1",
       PYTHONIOENCODING: "utf-8",
-      PATH: [layout.ffmpegDir, process.env.PATH].filter(Boolean).join(path.delimiter),
+      // ffmpeg for the media work; deno for yt-dlp's YouTube JavaScript challenge.
+      PATH: [layout.ffmpegDir, layout.denoDir, process.env.PATH].filter(Boolean).join(path.delimiter),
     };
   }
 

@@ -20,6 +20,8 @@ const PARTS = [
     // The zip holds pgsql/{bin,lib,share,...}; only these are needed to run.
     keep: ["bin", "lib", "share"],
     inner: "pgsql",
+    // Translations (Kortes runs it with the C locale) and import libraries.
+    drop: ["share/locale", "lib/*.lib"],
     check: "bin/pg_ctl.exe",
   },
   {
@@ -34,6 +36,12 @@ const PARTS = [
     keep: ["bin", "LICENSE"],
     drop: ["bin/ffplay.exe"], // a video player; Kortes only needs ffmpeg and ffprobe
     check: "bin/ffmpeg.exe",
+  },
+  {
+    // yt-dlp runs YouTube's JavaScript challenge with it (MIT license).
+    name: "deno",
+    url: "https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-pc-windows-msvc.zip",
+    check: "deno.exe",
   },
 ];
 
@@ -89,7 +97,17 @@ async function fetchPart(part) {
     if (fs.existsSync(from)) fs.cpSync(from, path.join(target, name), { recursive: true });
   }
   fs.rmSync(staging, { recursive: true, force: true });
-  for (const unused of part.drop ?? []) fs.rmSync(path.join(target, unused), { recursive: true, force: true });
+  for (const unused of part.drop ?? []) {
+    if (unused.includes("*")) {
+      const [dir, pattern] = [path.dirname(unused), path.basename(unused)];
+      const suffix = pattern.replace("*", "");
+      for (const name of fs.readdirSync(path.join(target, dir))) {
+        if (name.endsWith(suffix)) fs.rmSync(path.join(target, dir, name), { force: true });
+      }
+    } else {
+      fs.rmSync(path.join(target, unused), { recursive: true, force: true });
+    }
+  }
   if (!fs.existsSync(path.join(target, part.check))) throw new Error(`${part.name}: ${part.check} não encontrado`);
   console.log(`${part.name}: pronto em ${target}`);
 }

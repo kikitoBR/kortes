@@ -1,5 +1,5 @@
 {
-  "name": "kortes-desktop",
+  "name": "kortes",
   "productName": "Kortes",
   "version": "0.1.0",
   "description": "Kortes: cortes de vídeo com IA no seu computador",
@@ -7,8 +7,9 @@
   "main": "src/main.js",
   "scripts": {
     "dev": "electron .",
-    "dist": "electron-builder --win nsis --publish never",
-    "release": "electron-builder --win nsis --publish always"
+    "dist": "node scripts/prepare-app.mjs && electron-builder --win nsis --publish never",
+    "release": "node scripts/prepare-app.mjs && electron-builder --win nsis --publish always",
+    "prepare-app": "node scripts/prepare-app.mjs"
   },
   "dependencies": {
     "electron-updater": "6.8.11"
@@ -49,6 +50,10 @@
       {
         "from": "runtime/ffmpeg",
         "to": "ffmpeg"
+      },
+      {
+        "from": "runtime/deno",
+        "to": "deno"
       }
     ],
     "win": {
@@ -56,12 +61,21 @@
       "icon": "build/icon.ico"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
       "shortcutName": "Kortes",
+      "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
+      "uninstallerIcon": "build/icon.ico",
+      "installerLanguages": [
+        "pt_BR"
+      ],
+      "language": "1046",
+      "artifactName": "KortesSetup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",

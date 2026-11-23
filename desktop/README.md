@@ -35,7 +35,7 @@ licenças, então reinstalar o programa não gasta outro computador da licença.
 
 **Para você (publicar uma versão):**
 1. muda o código no branch `desktop` (ou traz melhorias da web com `git merge main`);
-2. sobe a versão no `desktop/package.json` (ex.: `1.4.0`) e cria a tag `desktop-v1.4.0`;
+2. sobe a versão no `desktop/package.json` (ex.: `1.4.0`) e cria a tag `v1.4.0` (`git tag v1.4.0 && git push kortes v1.4.0`);
 3. o GitHub Actions compila no Windows e publica o instalador e o `latest.yml` nos Releases.
 
 **Para o cliente (sem fazer nada):**

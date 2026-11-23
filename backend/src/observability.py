@@ -51,7 +51,8 @@ class JsonLogFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
-    logs_dir = Path("logs")
+    # LOG_DIR: Kortes Desktop keeps logs in its data folder, not in the program's.
+    logs_dir = Path(os.getenv("LOG_DIR") or "logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()

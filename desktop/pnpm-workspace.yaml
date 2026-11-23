@@ -1,0 +1,4 @@
+allowBuilds:
+  electron: true
+  # Squirrel installer support; Kortes builds an NSIS installer instead.
+  electron-winstaller: false

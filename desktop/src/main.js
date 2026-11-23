@@ -21,13 +21,30 @@ function log(line) {
   if (paths) fs.appendFile(path.join(paths.logsDir, "kortes.log"), message, () => {});
 }
 
+const ICON = path.join(__dirname, "..", "build", "icon.ico");
+const LOGO = path.join(__dirname, "..", "assets", "logo.png");
+
 function showSplash(window, message) {
+  let logo = "";
+  try {
+    logo = `data:image/png;base64,${fs.readFileSync(LOGO).toString("base64")}`;
+  } catch {
+    // the name alone still identifies the app
+  }
   const html = `<!doctype html><html lang="pt-BR"><meta charset="utf-8">
+    <style>
+      @keyframes pulse { 0%,100% { opacity:.35 } 50% { opacity:1 } }
+      .dot { display:inline-block; width:6px; height:6px; margin:0 3px; border-radius:50%;
+        background:#1c1917; animation:pulse 1.2s infinite; }
+      .dot:nth-child(2) { animation-delay:.2s } .dot:nth-child(3) { animation-delay:.4s }
+    </style>
     <body style="margin:0;height:100vh;display:grid;place-items:center;background:#faf8f5;
-      font:15px system-ui,sans-serif;color:#1c1917">
+      font:15px system-ui,sans-serif;color:#1c1917;user-select:none;cursor:default">
       <div style="text-align:center">
+        ${logo ? `<img src="${logo}" width="72" height="72" alt="" style="display:block;margin:0 auto 14px">` : ""}
         <div style="font-size:28px;font-weight:700;letter-spacing:-.02em">Kortes</div>
         <div id="m" style="margin-top:12px;color:#78716c">${message}</div>
+        <div style="margin-top:18px"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
       </div></body></html>`;
   window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
@@ -82,6 +99,7 @@ async function start() {
     minWidth: 1024,
     minHeight: 680,
     title: "Kortes",
+    icon: ICON,
     backgroundColor: "#faf8f5",
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, sandbox: true },
@@ -134,6 +152,9 @@ async function start() {
   }
   setupUpdates();
 }
+
+// Groups the window under the Kortes icon in the taskbar (not Electron's).
+app.setAppUserModelId("site.kikito.kortes");
 
 // One Kortes at a time: a second launch brings the open window forward.
 if (!app.requestSingleInstanceLock()) {

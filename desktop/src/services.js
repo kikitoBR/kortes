@@ -34,6 +34,19 @@ function run(file, args, options = {}) {
   });
 }
 
+/**
+ * Runs a program that starts a background server and then exits (pg_ctl start).
+ * Its output is not captured: on Windows the server it starts inherits those
+ * handles and keeps them open, so waiting for them to close would never end.
+ */
+function runAndForget(file, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { windowsHide: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${path.basename(file)} terminou com código ${code}`))));
+  });
+}
+
 function waitFor(check, { timeoutMs, label }) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
@@ -158,16 +171,17 @@ class Services {
       ["-m", "uvicorn", "src.main:app", "--host", "127.0.0.1", "--port", String(this.ports.backend)],
       { env, cwd: layout.backendDir },
     );
+    await waitFor(() => httpOk(`http://127.0.0.1:${this.ports.backend}/health`), {
+      timeoutMs: 180000,
+      label: "O backend",
+    });
+    // After the backend: it applies the database migrations the worker's jobs need.
     this.spawnService(
       "worker",
       layout.python,
       ["-c", "import sys; from arq.cli import cli; sys.argv=['arq','src.workers.tasks.WorkerSettings']; cli()"],
       { env, cwd: layout.backendDir },
     );
-    await waitFor(() => httpOk(`http://127.0.0.1:${this.ports.backend}/health`), {
-      timeoutMs: 180000,
-      label: "O backend",
-    });
 
     this.spawnService("frontend", process.execPath, [layout.frontendServer], {
       cwd: path.dirname(layout.frontendServer),
@@ -242,17 +256,22 @@ class Services {
         fs.rmSync(pwFile, { force: true });
       }
     }
-    await run(bin("pg_ctl"), [
+    await runAndForget(bin("pg_ctl"), [
       "start", "-w", "-t", "60", "-D", pgData, "-l", path.join(layout.logsDir, "postgres.log"),
       "-o", `-p ${this.ports.postgres} -h 127.0.0.1`,
     ]);
     this.postgresStarted = true;
-    if (fresh) {
+    // Written only once the schema is in: a first run cut short starts the database over.
+    const ready = path.join(layout.dataDir, ".database-ready");
+    if (!fs.existsSync(ready)) {
+      this.status("Criando o banco de dados (só na primeira vez)…");
       const env = { ...process.env, PGPASSWORD: secrets.postgresPassword };
       const psql = (args) => run(bin("psql"), ["-h", "127.0.0.1", "-p", String(this.ports.postgres), "-U", "kortes", ...args], { env });
+      await psql(["-d", "postgres", "-c", "DROP DATABASE IF EXISTS kortes"]);
       await psql(["-d", "postgres", "-c", "CREATE DATABASE kortes"]);
       // The same schema the Docker image loads (the backend applies migrations on top).
       await psql(["-d", "kortes", "-v", "ON_ERROR_STOP=1", "-f", layout.initSql]);
+      fs.writeFileSync(ready, new Date().toISOString());
     }
   }
 
@@ -271,8 +290,19 @@ class Services {
 
   async stop() {
     this.stopping = true;
-    for (const { child } of [...this.children].reverse()) {
-      if (child.exitCode === null) child.kill();
+    for (const { name, child } of [...this.children].reverse()) {
+      if (child.exitCode !== null) continue;
+      if (process.platform === "win32") {
+        // The whole tree: a venv's python.exe is a launcher that starts the real
+        // Python as its child, which a plain kill would leave running.
+        try {
+          await run("taskkill", ["/pid", String(child.pid), "/T", "/F"]);
+        } catch (error) {
+          this.log(`${name} não fechou: ${error.message}`);
+        }
+      } else {
+        child.kill();
+      }
     }
     if (this.postgresStarted) {
       try {

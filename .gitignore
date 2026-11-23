@@ -26,3 +26,6 @@ docs/youtube-provider-registry*.json
 # Local agent checkouts
 .claude/worktrees/
 .agents/
+
+# Personal Claude Code settings
+.claude/settings.local.json

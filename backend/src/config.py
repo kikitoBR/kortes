@@ -3,7 +3,10 @@ import os
 
 from .runtime_settings import get_cached_setting, setting_prefers_admin
 
-load_dotenv()
+# Kortes Desktop gets its whole configuration from the launcher; a stray .env
+# (e.g. a developer's checkout) must not switch its AI or keys.
+if os.getenv("KORTES_EDITION", "").strip().lower() != "desktop":
+    load_dotenv()
 
 _config_override = None
 LOCAL_OLLAMA_BASE_URL = "http://localhost:11434/v1"

@@ -25,6 +25,8 @@
     },
     "files": [
       "src/**/*",
+      "assets/**/*",
+      "build/icon.ico",
       "package.json"
     ],
     "extraResources": [
@@ -57,7 +59,9 @@
       "oneClick": true,
       "perMachine": false,
       "shortcutName": "Kortes",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     },
     "publish": {
       "provider": "github",
@@ -65,11 +69,5 @@
       "repo": "kortes",
       "releaseType": "release"
     }
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "electron-winstaller"
-    ]
   }
 }

@@ -31,9 +31,10 @@ function layout(app) {
   const python = packaged
     ? path.join(resources, "python", "python.exe")
     : path.join(repo, "backend", ".venv-win", "Scripts", "python.exe");
+  // Built by scripts/build-frontend.mjs (packaged under resources/app).
   const frontendServer = packaged
     ? path.join(resources, "app", "frontend", "server.js")
-    : path.join(repo, "frontend", ".next", "standalone", "server.js");
+    : path.join(repo, "desktop", "build", "app", "frontend", "server.js");
 
   const result = {
     packaged,

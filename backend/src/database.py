@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (Kortes Desktop: from the launcher only)
+if os.getenv("KORTES_EDITION", "").strip().lower() != "desktop":
+    load_dotenv()
 
 DEFAULT_DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql+asyncpg://localhost:5432/supoclip"

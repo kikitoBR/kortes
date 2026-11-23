@@ -29,8 +29,9 @@ jobs:
         with:
           node-version: "24"
 
-      - name: pnpm
-        run: npm install -g pnpm@11
+      # Each folder pins its own pnpm ("packageManager"): frontend 10.x, desktop 11.x.
+      - name: pnpm (corepack)
+        run: corepack enable
 
       - uses: astral-sh/setup-uv@v6
 
@@ -46,27 +47,37 @@ jobs:
 
       - name: Portable programs (Postgres, Redis, ffmpeg, Deno)
         working-directory: desktop
-        run: node scripts/fetch-runtime.mjs
+        run: set -o pipefail; node scripts/fetch-runtime.mjs 2>&1 | tee -a ../ci.log
 
       - name: Portable Python with the backend
         working-directory: desktop
-        run: node scripts/build-python.mjs
+        run: set -o pipefail; node scripts/build-python.mjs 2>&1 | tee -a ../ci.log
 
       - name: Frontend (desktop edition)
         working-directory: desktop
-        run: node scripts/build-frontend.mjs
+        run: set -o pipefail; node scripts/build-frontend.mjs 2>&1 | tee -a ../ci.log
 
       - name: Installer
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pnpm install --frozen-lockfile
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            pnpm run release
-          else
-            pnpm run dist
-          fi
+          set -o pipefail
+          {
+            pnpm install --frozen-lockfile
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              pnpm run release
+            else
+              pnpm run dist
+            fi
+          } 2>&1 | tee -a ../ci.log
+
+      # Logs need a GitHub login; annotations are public, so a failure shows its cause there.
+      - name: Show the end of the log
+        if: failure()
+        run: |
+          tail -n 40 ci.log | sed 's/\[[0-9;]*m//g' | awk '{printf "%s%%0A", $0}' > tail.txt
+          echo "::error title=Kortes Desktop build::$(cat tail.txt)"
 
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'

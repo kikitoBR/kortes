@@ -1,7 +1,7 @@
 {
   "name": "kortes",
   "productName": "Kortes",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Kortes: cortes de vídeo com IA no seu computador",
   "private": true,
   "packageManager": "pnpm@11.18.0",

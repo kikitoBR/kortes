@@ -76,7 +76,7 @@ jobs:
       - name: Show the end of the log
         if: failure()
         run: |
-          tail -n 40 ci.log | sed 's/\[[0-9;]*m//g' | awk '{printf "%s%%0A", $0}' > tail.txt
+          tail -n 40 ci.log | tr -cd '[:print:]\n' | awk '{printf "%s%%0A", $0}' > tail.txt
           echo "::error title=Kortes Desktop build::$(cat tail.txt)"
 
       - uses: actions/upload-artifact@v4

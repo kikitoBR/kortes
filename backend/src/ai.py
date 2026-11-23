@@ -562,6 +562,8 @@ def _get_missing_llm_key_error(model_name: str, runtime_config: Config) -> Optio
         return "OpenRouter model must include its vendor, for example openrouter:anthropic/claude-sonnet-5.5."
 
     if provider == "openai" and not runtime_config.openai_api_key:
+        if getattr(runtime_config, "desktop", False):
+            return "Ative sua licença do Kortes em Configurações para usar a IA."
         return (
             "Selected LLM provider is OpenAI, but OPENAI_API_KEY is not set. "
             "Set OPENAI_API_KEY or choose another provider with a matching API key."
@@ -607,6 +609,23 @@ def _build_transcript_model(
             },
         )
     if provider == "openai" and runtime_config.openai_base_url:
+        if getattr(runtime_config, "desktop", False):
+            # Kortes Desktop: the license server counts this computer against
+            # the license's device limit.
+            from openai import AsyncOpenAI
+
+            from .desktop import device_headers
+
+            return OpenAIModel(
+                provider_model_name,
+                provider=OpenAIProvider(
+                    openai_client=AsyncOpenAI(
+                        base_url=runtime_config.openai_base_url,
+                        api_key=runtime_config.openai_api_key,
+                        default_headers=device_headers(),
+                    )
+                ),
+            )
         return OpenAIModel(
             provider_model_name,
             provider=OpenAIProvider(

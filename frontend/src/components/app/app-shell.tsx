@@ -20,17 +20,20 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
+import { isDesktop } from "@/lib/edition";
+import { isDesktopReady } from "@/components/desktop/desktop-setup";
 
 // `mobile: false` keeps an item out of the five-slot mobile tab bar.
 // `social: true` items only show when social publishing is enabled for the user.
-type NavItem = { href: string; label: string; icon: typeof Film; match: (path: string) => boolean; mobile?: boolean; social?: boolean };
+// `web: true` items do not exist in Kortes Desktop.
+type NavItem = { href: string; label: string; icon: typeof Film; match: (path: string) => boolean; mobile?: boolean; social?: boolean; web?: boolean };
 
 const NAV: NavItem[] = [
   { href: "/", label: "Criar", icon: Sparkles, match: (p) => p === "/" },
   { href: "/list", label: "Biblioteca", icon: Film, match: (p) => p.startsWith("/list") || p.startsWith("/tasks") },
   { href: "/settings/social", label: "Redes Sociais", icon: Share2, match: (p) => p.startsWith("/settings/social"), social: true },
   { href: "/analytics", label: "Métricas", icon: ChartColumn, match: (p) => p.startsWith("/analytics"), social: true },
-  { href: "/settings/api-keys", label: "Agentes & API", icon: Bot, match: (p) => p.startsWith("/settings/api-keys"), mobile: false },
+  { href: "/settings/api-keys", label: "Agentes & API", icon: Bot, match: (p) => p.startsWith("/settings/api-keys"), mobile: false, web: true },
   { href: "/settings", label: "Configurações", icon: Settings, match: (p) => p === "/settings" },
 ];
 
@@ -48,6 +51,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [billing] = useBillingSummary(Boolean(session?.user));
   // The editor needs every pixel — collapse the sidebar to an icon rail there.
   const compact = /^\/tasks\/[^/]+\/edit/.test(pathname);
+
+  // Kortes Desktop: no license yet, so the first-run setup comes first.
+  useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    void isDesktopReady().then((ready) => {
+      if (!cancelled && !ready) router.replace("/setup");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -72,7 +87,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const user = session?.user;
   const admin = Boolean((user as { is_admin?: boolean } | undefined)?.is_admin);
   const socialAccess = useSocialAccess(Boolean(user));
-  const nav = NAV.filter((item) => !item.social || socialAccess);
+  const nav = NAV.filter((item) => (!item.social || socialAccess) && !(isDesktop && item.web));
   const mobileNav = nav.filter((item) => item.mobile !== false);
   const items = admin ? [...nav, { href: "/admin", label: "Admin", icon: Shield, match: (p: string) => p.startsWith("/admin") }] : nav;
 
@@ -118,9 +133,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </button>
 
         <div className="mt-auto w-full space-y-2 pb-3">
-          <Announcements key={user.id} userId={user.id} compact={compact} />
+          {isDesktop ? null : <Announcements key={user.id} userId={user.id} compact={compact} />}
           {!compact && billing?.monetization_enabled && <UsageCard billing={billing} />}
-          <UserRow compact={compact} name={user.name} email={user.email} />
+          {isDesktop ? null : <UserRow compact={compact} name={user.name} email={user.email} />}
         </div>
       </aside> : null}
 
@@ -267,7 +282,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
       { id: "library", label: "Abrir biblioteca", href: "/list", icon: Film },
       ...(socialAccess ? [{ id: "social", label: "Contas sociais", hint: "Conectar YouTube, TikTok e Instagram", href: "/settings/social", icon: Share2 },
       { id: "analytics", label: "Métricas", hint: "Desempenho dos clipes publicados", href: "/analytics", icon: ChartColumn }] : []),
-      { id: "keys", label: "Agentes & API", hint: "Chaves de API e MCP", href: "/settings/api-keys", icon: Bot },
+      ...(isDesktop ? [] : [{ id: "keys", label: "Agentes & API", hint: "Chaves de API e MCP", href: "/settings/api-keys", icon: Bot }]),
       { id: "settings", label: "Configurações", href: "/settings", icon: Settings },
     ].filter((entry) => !q || entry.label.toLowerCase().includes(q));
     const matches = generations

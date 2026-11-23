@@ -252,8 +252,11 @@ class WorkerSettings:
         # Daily: drop uploaded sources past SOURCE_VIDEO_RETENTION_DAYS (off by default).
         cron(purge_expired_source_videos, hour=3, minute=30, timeout=1800),
         cron(purge_live_archives, hour=4, minute=10, timeout=1800),
-        # Every minute: promote due scheduled posts and poll async publishes.
-        cron(dispatch_scheduled_social_posts, second=0, timeout=300),
-        # Hourly: pull audience metrics back for the performance loop.
-        cron(refresh_social_metrics, minute=7, second=0, timeout=1800),
     ]
+    if not config.desktop:  # Kortes Desktop has no social publishing
+        cron_jobs += [
+            # Every minute: promote due scheduled posts and poll async publishes.
+            cron(dispatch_scheduled_social_posts, second=0, timeout=300),
+            # Hourly: pull audience metrics back for the performance loop.
+            cron(refresh_social_metrics, minute=7, second=0, timeout=1800),
+        ]

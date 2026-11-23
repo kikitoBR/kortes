@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { isDesktop } from "@/lib/edition";
 import { ArrowRight, CalendarDays, Check } from "lucide-react";
 
 import { RelatedGuides } from "@/components/marketing/related-guides";
@@ -18,6 +19,8 @@ interface SeoLandingPageProps {
 export const dynamicParams = false;
 
 export function generateStaticParams() {
+  // Kortes Desktop has no marketing pages.
+  if (isDesktop) return [];
   return seoPages.map((page) => ({ slug: page.slug }));
 }
 

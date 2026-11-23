@@ -22,6 +22,8 @@ import { track } from "@/lib/datafast";
 import Link from "next/link";
 import { AlertCircle, Bot, Check, ChevronRight, CreditCard, Loader2, Mail, Megaphone, Share2, Type } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isDesktop } from "@/lib/edition";
+import { DesktopSetup } from "@/components/desktop/desktop-setup";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 
 interface UserPreferences {
@@ -288,9 +290,11 @@ export default function SettingsPage() {
   return (
     <main className={cn("mx-auto w-full max-w-3xl px-4 pt-8 sm:px-8 md:pt-10", showSaveBar ? "pb-32" : "pb-16")}>
       <h1 className="font-display text-3xl font-bold tracking-tight">Configurações</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Padrões para novos vídeos gerados, notificações e seu plano.</p>
+      <p className="mt-1 text-sm text-muted-foreground">{isDesktop ? "Licença, transcrição e padrões para novos vídeos." : "Padrões para novos vídeos gerados, notificações e seu plano."}</p>
 
       <div className="mt-8 space-y-6">
+        {isDesktop ? <DesktopSetup /> : null}
+
         <Section icon={<Type className="size-4" />} title="Padrões de legenda" description="Aplicados a cada novo vídeo criado. Você ainda pode ajustá-los por clipe.">
           <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_150px]">
             <div className="space-y-5">
@@ -364,7 +368,7 @@ export default function SettingsPage() {
           </div>
         </Section>
 
-        <Section icon={<Mail className="size-4" />} title="Notificações" description="Como avisamos quando seus clipes estiverem prontos.">
+        {isDesktop ? null : <Section icon={<Mail className="size-4" />} title="Notificações" description="Como avisamos quando seus clipes estiverem prontos.">
           <div className="flex items-center justify-between gap-4">
             <Label htmlFor="completion-emails" className="flex-col items-start gap-0.5">
               <span className="text-sm font-medium">E-mails de conclusão</span>
@@ -372,7 +376,7 @@ export default function SettingsPage() {
             </Label>
             <Switch id="completion-emails" checked={completionEmails} onCheckedChange={setCompletionEmails} disabled={isLoading} />
           </div>
-        </Section>
+        </Section>}
 
         {billingSummary?.monetization_enabled && (
           <Section id="plan" icon={<CreditCard className="size-4" />} title="Plano & cobrança" description={isPaidBillingPlan(billingSummary.plan) ? "Gerencie sua assinatura e faturas." : "Escolha o plano ideal para a quantidade de clipes que você produz."}>
@@ -472,40 +476,44 @@ export default function SettingsPage() {
           </Section>
         )}
 
-        <Link href="/settings/api-keys" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Bot className="size-4" /></span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold">Agentes &amp; API</span>
-            <span className="block text-xs text-muted-foreground">Chaves de API para agentes de IA (MCP) e API REST</span>
-          </span>
-          <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </Link>
+        {isDesktop ? null : (
+          <>
+            <Link href="/settings/api-keys" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Bot className="size-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold">Agentes &amp; API</span>
+                <span className="block text-xs text-muted-foreground">Chaves de API para agentes de IA (MCP) e API REST</span>
+              </span>
+              <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            </Link>
 
-        <Link href="/settings/social" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Share2 className="size-4" /></span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold">Contas sociais</span>
-            <span className="block text-xs text-muted-foreground">Conecte YouTube, TikTok e Instagram para publicar clipes e acompanhar desempenho</span>
-          </span>
-          <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </Link>
+            <Link href="/settings/social" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Share2 className="size-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold">Contas sociais</span>
+                <span className="block text-xs text-muted-foreground">Conecte YouTube, TikTok e Instagram para publicar clipes e acompanhar desempenho</span>
+              </span>
+              <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            </Link>
 
-        <Link href="/settings/creator-program" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Megaphone className="size-4" /></span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold">Programa de criadores</span>
-            <span className="block text-xs text-muted-foreground">Faça vídeos sobre o Kortes, ganhe o Pro gratuito e um cupom para seu público</span>
-          </span>
-          <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </Link>
+            <Link href="/settings/creator-program" className="group flex items-center gap-4 rounded-2xl border bg-background p-5 transition-colors hover:border-foreground/25">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-muted"><Megaphone className="size-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold">Programa de criadores</span>
+                <span className="block text-xs text-muted-foreground">Faça vídeos sobre o Kortes, ganhe o Pro gratuito e um cupom para seu público</span>
+              </span>
+              <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            </Link>
 
-        <DeleteAccountSection
-          email={session.user.email}
-          hasAppStoreSubscription={
-            billingSummary?.subscription_provider === "apple" &&
-            ["active", "trialing", "past_due"].includes(billingSummary.subscription_status)
-          }
-        />
+            <DeleteAccountSection
+              email={session.user.email}
+              hasAppStoreSubscription={
+                billingSummary?.subscription_provider === "apple" &&
+                ["active", "trialing", "past_due"].includes(billingSummary.subscription_status)
+              }
+            />
+          </>
+        )}
 
         {error && (
           <Alert className="border-red-200 bg-red-50">

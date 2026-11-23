@@ -125,6 +125,23 @@ and enqueues `watch_live` on the `supoclip_live` queue, served by the `live-work
   clip in assembly (plus the queue unless discarded). Recording also stops at the plan's YouTube duration limit. A
   restarted worker resumes (arq retries, state.json). The live worker runs blocking steps on a 32-thread executor.
 
+### Kortes Desktop (`KORTES_EDITION=desktop`)
+
+The same code runs as a single-user app on the customer's PC (the web stays as it is):
+- **Backend** (`config.desktop`, `src/desktop.py`, `api/routes/desktop.py`): AI is `openai:kortes` on the license
+  server (`KORTES_LICENSE_URL`, default `https://gemini.kikito.site/v1`, the gemini-web2api's `kl_...` licenses)
+  with the license as `OPENAI_API_KEY` and this PC's hashed id in `x-kortes-device` (`KORTES_DEVICE_ID` from the
+  launcher, else a random id kept in `KORTES_DATA_DIR`). `/desktop/setup|license|assemblyai` check the keys live and
+  save them encrypted in `app_settings` (`prefer_admin_value`). Transcription uses the customer's AssemblyAI key and
+  falls back to local Whisper when there is none or it fails (`TRANSCRIPTION_FALLBACK=whisper`, also for lives).
+  No admin, account, feedback, API-key or social routers; no social crons.
+- **Frontend** (`NEXT_PUBLIC_KORTES_EDITION=desktop`, build arg; `src/lib/edition.ts`): no sign-in (a fixed local
+  user, created by `getServerSession`), `src/middleware.ts` sends web-only pages home and 404s their API routes,
+  no analytics/attribution/feedback/announcements, `/setup` first-run page (license, then AssemblyAI or Whisper),
+  the same cards in Configurações.
+- **Try it:** `docker compose -p kortes-desktop -f docker-compose.yml -f docker-compose.desktop.yml up -d --build
+  postgres redis backend worker frontend` → http://localhost:3207 (own containers, ports, network and volumes).
+
 ### Frontend Architecture
 
 - **Next.js 15** with App Router, React 19, TailwindCSS v4

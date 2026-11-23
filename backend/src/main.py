@@ -167,21 +167,31 @@ def create_app(
     app.include_router(tasks.router)
     from .api.routes.editor import router as editor_router
     app.include_router(editor_router)
-    app.include_router(admin_router)
 
     from .api.routes.media import router as media_router
-    from .api.routes.feedback import router as feedback_router
     from .api.routes.billing import router as billing_router
-    from .api.routes.api_keys import router as api_keys_router
-    from .api.routes.account import router as account_router
-    from .api.routes.social import router as social_router
 
     app.include_router(media_router)
-    app.include_router(feedback_router)
+    # Self-hosted billing reports an unlimited plan; the app reads it everywhere.
     app.include_router(billing_router)
-    app.include_router(api_keys_router)
-    app.include_router(account_router)
-    app.include_router(social_router)
+
+    if runtime_config.desktop:
+        # Kortes Desktop: one person on their own PC. No admin, accounts (emails),
+        # feedback (emails), API keys or social publishing; the setup routes instead.
+        from .api.routes.desktop import router as desktop_router
+
+        app.include_router(desktop_router)
+    else:
+        from .api.routes.feedback import router as feedback_router
+        from .api.routes.api_keys import router as api_keys_router
+        from .api.routes.account import router as account_router
+        from .api.routes.social import router as social_router
+
+        app.include_router(admin_router)
+        app.include_router(feedback_router)
+        app.include_router(api_keys_router)
+        app.include_router(account_router)
+        app.include_router(social_router)
 
     @app.get("/")
     def read_root():

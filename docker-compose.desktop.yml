@@ -1,0 +1,57 @@
+# Kortes Desktop on Docker, next to (not instead of) a normal install:
+#
+#   docker compose -p kortes-desktop -f docker-compose.yml -f docker-compose.desktop.yml \
+#     up -d --build postgres redis backend worker frontend
+#
+# Opens at http://localhost:3207. Its own containers, ports, network and volumes;
+# the AI comes from the license typed on the setup page, transcription from the
+# AssemblyAI key typed there or local Whisper. Keys in .env are not used.
+x-desktop-env: &desktop-env
+  KORTES_EDITION: desktop
+  KORTES_LICENSE_URL: ${KORTES_LICENSE_URL:-https://gemini.kikito.site/v1}
+  LLM: ""
+  OPENAI_API_KEY: ""
+  OPENAI_BASE_URL: ""
+  GOOGLE_API_KEY: ""
+  ASSEMBLY_AI_API_KEY: ""
+  ASSEMBLY_AI_FALLBACK_API_KEYS: ""
+  TRANSCRIPTION_PROVIDER: assemblyai
+  WHISPER_MODEL_SIZE: ${DESKTOP_WHISPER_MODEL:-base}
+  KORTES_DATA_DIR: /app/uploads
+
+services:
+  frontend:
+    container_name: kortes-desktop-frontend
+    build:
+      args:
+        - NEXT_PUBLIC_KORTES_EDITION=desktop
+        - NEXT_PUBLIC_APP_URL=http://localhost:3207
+        - NEXT_PUBLIC_DATAFAST_WEBSITE_ID=
+    ports: !override
+      - "127.0.0.1:3207:3107"
+    environment:
+      NEXT_PUBLIC_KORTES_EDITION: desktop
+      NEXT_PUBLIC_APP_URL: http://localhost:3207
+      BETTER_AUTH_URL: http://localhost:3207
+      BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:3207
+  backend:
+    container_name: kortes-desktop-backend
+    ports: !override
+      - "127.0.0.1:8108:8000"
+    environment:
+      <<: *desktop-env
+  worker:
+    container_name: kortes-desktop-worker
+    environment:
+      <<: *desktop-env
+      # One machine: the worker renders its own clips.
+      CLIP_RENDER_QUEUE: "false"
+  redis:
+    container_name: kortes-desktop-redis
+    ports: !reset []
+  postgres:
+    container_name: kortes-desktop-postgres
+
+networks:
+  default:
+    name: kortes-desktop-network

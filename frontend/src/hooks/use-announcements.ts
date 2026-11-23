@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { ANNOUNCEMENTS_UPDATED_EVENT, type Announcement } from "@/lib/announcements";
+import { isDesktop } from "@/lib/edition";
 
 let pending: Promise<Announcement[] | null> | null = null;
 
 function loadAnnouncements() {
+  // Kortes Desktop has no announcements.
+  if (isDesktop) return Promise.resolve(null);
   pending ??= fetch("/api/announcements", { cache: "no-store" })
     .then(async response => response.ok ? ((await response.json()) as { announcements: Announcement[] }).announcements : null)
     .catch(() => null)

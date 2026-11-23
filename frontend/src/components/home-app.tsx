@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 import { WebcamRegionPicker, type WebcamRegion } from "@/components/webcam-region-picker";
 import { isLiveLink } from "@/lib/live-links";
+import { isDesktop } from "@/lib/edition";
 
 interface CaptionTemplate {
   id: string;
@@ -378,9 +379,11 @@ export default function HomeApp() {
     );
   }
 
-  const limitNote = billingSummary?.max_youtube_duration_seconds
-    ? `${formatBillingPlanName(billingSummary.plan)}: vídeos do YouTube de até ${billingSummary.max_youtube_duration_seconds / 60} minutos. Verificamos a duração antes de consumir créditos.`
-    : null;
+  const limitNote = !billingSummary?.max_youtube_duration_seconds
+    ? null
+    : isDesktop
+    ? `Vídeos do YouTube de até ${billingSummary.max_youtube_duration_seconds / 60} minutos.`
+    : `${formatBillingPlanName(billingSummary.plan)}: vídeos do YouTube de até ${billingSummary.max_youtube_duration_seconds / 60} minutos. Verificamos a duração antes de consumir créditos.`;
 
   return (
     <AppShell>
@@ -820,8 +823,12 @@ export default function HomeApp() {
 
           <p id="youtube-duration-limit" className="mt-4 text-center text-xs text-muted-foreground">
             {limitNote ? `${limitNote} ` : ""}
-            Notificações por e-mail seguem suas preferências em{" "}
-            <Link href="/settings" className="font-medium text-foreground underline-offset-2 hover:underline">Configurações</Link>.
+            {isDesktop ? null : (
+              <>
+                Notificações por e-mail seguem suas preferências em{" "}
+                <Link href="/settings" className="font-medium text-foreground underline-offset-2 hover:underline">Configurações</Link>.
+              </>
+            )}
           </p>
         </div>
 

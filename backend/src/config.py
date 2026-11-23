@@ -172,6 +172,22 @@ class Config:
         self.clip_render_queue = self._get_bool_env("CLIP_RENDER_QUEUE", False)
 
         self.self_host = self._get_bool_env("SELF_HOST", True)
+        # Kortes Desktop: one person on their own PC. AI through a license on
+        # the license server, transcription with AssemblyAI (the customer's key)
+        # falling back to local Whisper, and no accounts, billing, social
+        # publishing, API keys or admin (see desktop.py and main.py).
+        self.edition = (os.getenv("KORTES_EDITION") or "web").strip().lower()
+        self.desktop = self.edition == "desktop"
+        self.license_server_url = (
+            os.getenv("KORTES_LICENSE_URL") or "https://gemini.kikito.site/v1"
+        ).strip().rstrip("/")
+        self.transcription_fallback = (
+            os.getenv("TRANSCRIPTION_FALLBACK") or ("whisper" if self.desktop else "")
+        ).strip().lower()
+        if self.desktop:
+            # The license is the AI key: model "kortes" on the license server.
+            self.llm = self._get_runtime_setting("LLM") or "openai:kortes"
+            self.openai_base_url = self.openai_base_url or self.license_server_url
         self.monetization_enabled = not self.self_host
         self.backend_auth_secret = self._get_optional_env("BACKEND_AUTH_SECRET")
         self.allow_unsigned_backend_auth = self._get_bool_env(

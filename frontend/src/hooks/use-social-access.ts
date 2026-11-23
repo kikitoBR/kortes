@@ -2,10 +2,14 @@
 
 import { useEffect, useState } from "react";
 
+import { isDesktop } from "@/lib/edition";
+
 // One request per page load, shared by the shell and the pages it wraps.
 let pending: Promise<boolean> | null = null;
 
 function loadSocialAccess() {
+  // Kortes Desktop has no social publishing.
+  if (isDesktop) return Promise.resolve(false);
   pending ??= fetch("/api/social/providers", { cache: "no-store" })
     .then(async (response) => {
       if (!response.ok) return false;

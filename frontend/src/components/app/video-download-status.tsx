@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertCircle, Wrench } from "lucide-react";
+import { isDesktop } from "@/lib/edition";
 
 type ServiceStatus = {
   status: "operational" | "degraded" | "outage" | "maintenance";
@@ -42,6 +43,8 @@ export function VideoDownloadStatus() {
   const [component, setComponent] = useState<ServiceStatus | null>(null);
 
   useEffect(() => {
+    // Kortes Desktop downloads on the customer's own connection; no service status.
+    if (isDesktop) return;
     let active = true;
     let controller: AbortController | null = null;
 

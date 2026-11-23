@@ -354,6 +354,17 @@ def get_video_transcript(
                 "Pass source_url to get_video_transcript()."
             )
         return _get_transcript_with_youtube_captions(source_url)
+    if runtime_config.transcription_fallback == "whisper":
+        # Kortes Desktop: the customer's AssemblyAI key when there is one, local
+        # Whisper when there is none or it fails (no credit, revoked, offline).
+        if not runtime_config.assembly_ai_api_key:
+            logger.info("No AssemblyAI key: transcribing with local Whisper")
+            return _get_transcript_with_whisper(video_path, runtime_config)
+        try:
+            return _get_transcript_with_assemblyai(video_path, speech_model, runtime_config)
+        except Exception as exc:
+            logger.warning("AssemblyAI failed (%s); transcribing with local Whisper instead", exc)
+            return _get_transcript_with_whisper(video_path, runtime_config)
     return _get_transcript_with_assemblyai(video_path, speech_model, runtime_config)
 
 

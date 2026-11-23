@@ -8,6 +8,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FeedbackButton } from "@/components/feedback-button";
 import { getSiteUrl } from "@/lib/site";
+import { isDesktop } from "@/lib/edition";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,7 +29,8 @@ const syne = Syne({
 const dataFastWebsiteId = process.env.NEXT_PUBLIC_DATAFAST_WEBSITE_ID;
 const dataFastDomain = process.env.NEXT_PUBLIC_DATAFAST_DOMAIN;
 const shouldTrackLocalhost = process.env.NEXT_PUBLIC_DATAFAST_ALLOW_LOCALHOST === "true";
-const isDataFastEnabled = Boolean(dataFastWebsiteId && dataFastDomain);
+// Kortes Desktop sends no analytics.
+const isDataFastEnabled = !isDesktop && Boolean(dataFastWebsiteId && dataFastDomain);
 
 export const metadata: Metadata = {
   title: {
@@ -106,9 +108,13 @@ export default function RootLayout({
       >
         <TooltipProvider>
           {children}
-          <DataFastIdentity />
-          <AttributionTracker />
-          <FeedbackButton />
+          {isDesktop ? null : (
+            <>
+              <DataFastIdentity />
+              <AttributionTracker />
+              <FeedbackButton />
+            </>
+          )}
           <Toaster />
         </TooltipProvider>
       </body>

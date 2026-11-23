@@ -71,6 +71,7 @@ import {
   type SocialPost,
   type SocialProviderStatus,
 } from "@/lib/social";
+import { isDesktop } from "@/lib/edition";
 
 interface Clip {
   id: string;
@@ -173,7 +174,7 @@ export default function TaskPage() {
   const taskApiUrl = "/api/tasks";
 
   const loadSocialPosts = useCallback(async () => {
-    if (!params.id) return;
+    if (!params.id || isDesktop) return;
     try {
       const response = await fetch(`/api/social/posts?task_id=${params.id}`, { cache: "no-store" });
       if (!response.ok) return;
@@ -185,6 +186,7 @@ export default function TaskPage() {
   }, [params.id]);
 
   const loadSocialContext = useCallback(async () => {
+    if (isDesktop) return; // Kortes Desktop has no social publishing
     try {
       const [connectionsResponse, providersResponse] = await Promise.all([
         fetch("/api/social/connections", { cache: "no-store" }),
@@ -758,22 +760,24 @@ export default function TaskPage() {
                 <Button size="sm" variant="outline" onClick={() => setSettingsSheetOpen(true)}>
                   <Settings2 className="size-4" /><span className="hidden sm:inline">Restilizar</span>
                 </Button>
-                <div className="inline-flex items-center rounded-md border shadow-xs">
-                  <Button size="sm" variant="ghost" className="rounded-r-none" onClick={handleCopyShareLink} disabled={shareState === "copying"} aria-live="polite">
-                    {shareState === "copied" ? <Check className="size-4" /> : <Share2 className="size-4" />}
-                    <span className="max-sm:sr-only">{shareState === "copying" ? "Criando link…" : shareState === "copied" ? "Link copiado" : "Copiar link de compartilhamento"}</span>
-                  </Button>
-                  {task.share_enabled && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button size="icon-sm" variant="ghost" className="rounded-l-none border-l" onClick={handleRevokeShareLink} disabled={isRevokingShare} aria-label={isRevokingShare ? "Desativando…" : "Desativar link de compartilhamento"}>
-                          <Link2Off className="size-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Desativar link de compartilhamento</TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
+                {isDesktop ? null : (
+                  <div className="inline-flex items-center rounded-md border shadow-xs">
+                    <Button size="sm" variant="ghost" className="rounded-r-none" onClick={handleCopyShareLink} disabled={shareState === "copying"} aria-live="polite">
+                      {shareState === "copied" ? <Check className="size-4" /> : <Share2 className="size-4" />}
+                      <span className="max-sm:sr-only">{shareState === "copying" ? "Criando link…" : shareState === "copied" ? "Link copiado" : "Copiar link de compartilhamento"}</span>
+                    </Button>
+                    {task.share_enabled && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button size="icon-sm" variant="ghost" className="rounded-l-none border-l" onClick={handleRevokeShareLink} disabled={isRevokingShare} aria-label={isRevokingShare ? "Desativando…" : "Desativar link de compartilhamento"}>
+                            <Link2Off className="size-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Desativar link de compartilhamento</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                )}
                 <Button size="sm" asChild>
                   <Link href={`/tasks/${task.id}/edit`}><Clapperboard className="size-4" />Abrir editor</Link>
                 </Button>

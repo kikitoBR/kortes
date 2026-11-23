@@ -34,12 +34,19 @@ def transcribe_live_audio(audio: Path, processing_mode: str = "fast") -> List[Di
     )
 
     config = get_config()
-    if config.transcription_provider == "whisper":
+    whisper_fallback = config.transcription_fallback == "whisper"
+    if config.transcription_provider == "whisper" or (whisper_fallback and not config.assembly_ai_api_key):
         _get_transcript_with_whisper(audio, config)
     else:
         # YouTube captions do not exist for a stream in progress.
         model = config.fast_mode_transcript_model if processing_mode == "fast" else "best"
-        _get_transcript_with_assemblyai(audio, model, config)
+        try:
+            _get_transcript_with_assemblyai(audio, model, config)
+        except Exception:
+            if not whisper_fallback:
+                raise
+            # Kortes Desktop: the customer's AssemblyAI key failed; Whisper on this PC.
+            _get_transcript_with_whisper(audio, config)
     words = (load_cached_transcript_data(audio) or {}).get("words") or []
     audio.with_suffix(".transcript_cache.json").unlink(missing_ok=True)
     audio.with_name(f"{audio.stem}.transcription.mp3").unlink(missing_ok=True)

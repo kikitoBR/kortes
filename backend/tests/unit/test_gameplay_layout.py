@@ -140,3 +140,54 @@ def test_failed_gameplay_render_falls_back_to_default_framing():
     assert (ok, w, h) == (True, 1080, 1920)
     assert len(commands) == 2
     assert "vstack" not in " ".join(commands[1])
+
+
+def _cam_face_offset(cam, face):
+    fx, fy, fw, fh = face
+    return (fx + fw / 2 - cam["x"]) / cam["w"], (fy + fh / 2 - cam["y"]) / cam["h"]
+
+
+def test_webcam_crop_centres_a_face_sitting_left_in_its_box():
+    # A near-square webcam (576x500) whose streamer sits left of centre.
+    box = {"x": 0.0, "y": 0.0, "w": 0.3, "h": 500 / 1080}
+    face = (150.0, 160.0, 110.0, 110.0)  # centre x 205 of a 576-wide box
+    plain = reframing.gameplay_regions_from_box(1920, 1080, box)["cam"]
+    cam = reframing.gameplay_regions_from_box(1920, 1080, box, face)["cam"]
+
+    across, down = _cam_face_offset(cam, face)
+    assert abs(across - 0.5) < abs(_cam_face_offset(plain, face)[0] - 0.5)
+    assert abs(across - 0.5) < 0.06
+    assert 0.3 < down < 0.55
+    # Still inside the webcam box, same tile aspect, at most a 1/0.7 zoom.
+    assert cam["x"] >= 0 and cam["x"] + cam["w"] <= 576
+    assert cam["y"] >= 0 and cam["y"] + cam["h"] <= 500
+    assert abs(cam["w"] / cam["h"] - 1080 / reframing.GAMEPLAY_CAM_H) < 0.02
+    assert cam["w"] >= plain["w"] * reframing.CAM_MIN_CROP_SHARE - 2
+
+
+def test_webcam_crop_zoom_is_capped_for_a_face_at_the_edge():
+    box = {"x": 0.0, "y": 0.0, "w": 0.3, "h": 0.3}
+    face = (10.0, 100.0, 80.0, 80.0)  # hugging the left border
+    plain = reframing.gameplay_regions_from_box(1920, 1080, box)["cam"]
+    cam = reframing.gameplay_regions_from_box(1920, 1080, box, face)["cam"]
+
+    assert cam["x"] == 0  # slides as far as the box allows
+    assert cam["w"] >= plain["w"] * reframing.CAM_MIN_CROP_SHARE - 2
+
+
+def test_webcam_box_may_carry_the_face_as_fractions():
+    face = (150.0, 160.0, 110.0, 110.0)
+    box = {
+        "x": 0.0, "y": 0.0, "w": 0.3, "h": 500 / 1080,
+        "face": {"x": 150 / 1920, "y": 160 / 1080, "w": 110 / 1920, "h": 110 / 1080},
+    }
+    assert reframing.gameplay_regions_from_box(1920, 1080, box) == reframing.gameplay_regions_from_box(
+        1920, 1080, {k: v for k, v in box.items() if k != "face"}, face
+    )
+
+
+def test_a_face_outside_the_box_is_ignored():
+    box = {"x": 0.0, "y": 0.0, "w": 0.3, "h": 0.3}
+    assert reframing.gameplay_regions_from_box(1920, 1080, box, (1500.0, 800.0, 90.0, 90.0)) == (
+        reframing.gameplay_regions_from_box(1920, 1080, box)
+    )

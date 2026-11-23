@@ -149,9 +149,12 @@ def webcam_edges(
 
     sides_found = 0
 
+    # How much the game moves: a still stretch next to a moving game is the room.
+    scene_motion = float(np.median(motion))
+
     def side(
         start: float, stop: float, strength: np.ndarray, motion_profile: np.ndarray,
-        default: float, border: float,
+        default: float, border: float, room_to_edge: bool = False,
     ) -> float:
         nonlocal sides_found
         start_i, stop_i = int(round(start)), int(round(stop))
@@ -184,7 +187,19 @@ def webcam_edges(
             sides_found += 1
             return float(max(near, key=lambda n: strength[n]) if near else k)
 
-        # 2) No motion jump (static game scene): the steady straight edge.
+        # 2) A webcam against the side of the frame has no game beside it: when
+        # the game moves but everything from the face to the frame edge is as
+        # still as the room, the straight lines there are shelves and doors.
+        if (
+            room_to_edge
+            and abs(ks[-1] - border) <= 2
+            and scene_motion > MOTION_JUMP_MIN
+            and float(np.median(motion_profile[ks])) < scene_motion * 0.5
+        ):
+            sides_found += 1
+            return border
+
+        # 3) No motion jump (static game scene): the steady straight edge.
         values = strength[ks]
         best = int(np.argmax(values))
         if values[best] > EDGE_MIN_STRENGTH and values[best] > _median(values) * EDGE_DOMINANCE:
@@ -195,8 +210,10 @@ def webcam_edges(
         return border if abs(default - border) < abs(ks[-1] - border) + 2 else default
 
     bx, by, bw, bh = base
-    left = side(fx - 0.3 * fw, max(1, fx - 6 * fw), column_strength, column_motion, bx, 0)
-    right = side(fx + 1.3 * fw, min(w - 2, fx + 7 * fw), column_strength, column_motion, bx + bw, w)
+    left = side(fx - 0.3 * fw, max(1, fx - 6 * fw), column_strength, column_motion, bx, 0, True)
+    right = side(
+        fx + 1.3 * fw, min(w - 2, fx + 7 * fw), column_strength, column_motion, bx + bw, w, True
+    )
     # The face usually sits right under the top of the webcam.
     top = side(fy - 0.05 * fh, max(1, fy - 4 * fh), row_strength, row_motion, by, 0)
     bottom = side(fy + 1.4 * fh, min(h - 2, fy + 6 * fh), row_strength, row_motion, by + bh, h)
@@ -237,7 +254,7 @@ def _detect_faces(frame_bgr: np.ndarray, yunet, haar) -> List[Box]:
 def detect_webcam_box(clip_path: Path) -> Optional[Dict[str, object]]:
     """Locate the streamer's webcam overlay in a landscape clip.
 
-    Returns ``{"kind": "corner", "box": (x, y, w, h), "confidence": float}`` in
+    Returns ``{"kind": "corner", "box": (x, y, w, h), "face": (x, y, w, h), "confidence": float}`` in
     source pixels, ``{"kind": "full"}`` when the whole frame is the camera, or
     None when no steady face was found.
     """
@@ -282,4 +299,19 @@ def detect_webcam_box(clip_path: Path) -> Optional[Dict[str, object]]:
         f"found with {sides}/4 borders" if plausible else "sized from the face",
         tuple(int(v) for v in box), len(seen_in), len(frames),
     )
-    return {"kind": "corner", "box": box, "confidence": round(confidence, 2)}
+    return {"kind": "corner", "box": box, "face": face, "confidence": round(confidence, 2)}
+
+
+def find_steady_face(clip_path: Path) -> Optional[Box]:
+    """The streamer's face (the one that stays put), in source pixels, or None.
+
+    Used to centre a webcam box the user picked by hand on the face inside it.
+    """
+    frames = _sample_frames(clip_path, 12)
+    if len(frames) < 3:
+        return None
+    yunet, haar = open_yunet_detector(), open_haar_cascade()
+    fixed = group_fixed_face(
+        [_detect_faces(frame, yunet, haar) for frame in frames], frames[0].shape[1]
+    )
+    return fixed[0] if fixed else None

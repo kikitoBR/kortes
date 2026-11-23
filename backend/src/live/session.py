@@ -653,7 +653,12 @@ def detect_live_webcam(archive: Path) -> Optional[Dict[str, float]]:
             return None
         width, height = ffprobe_video_size(archive)
         x, y, w, h = found["box"]
-        return {"x": x / width, "y": y / height, "w": w / width, "h": h / height}
+        region: Dict[str, Any] = {"x": x / width, "y": y / height, "w": w / width, "h": h / height}
+        if found.get("face"):
+            # So every clip of the live centres the same face without looking again.
+            fx, fy, fw, fh = found["face"]
+            region["face"] = {"x": fx / width, "y": fy / height, "w": fw / width, "h": fh / height}
+        return region
     except Exception as exc:
         logger.warning("Live webcam detection failed: %s", exc)
         return None

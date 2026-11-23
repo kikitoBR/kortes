@@ -72,3 +72,21 @@ def test_webcam_bottom_is_the_nearest_jump_not_the_hud_below():
 def test_box_around_face_stays_in_frame():
     x, y, w, h = wd.box_around_face((600.0, 5.0, 40.0, 40.0), 640, 360)
     assert x >= 0 and y >= 0 and x + w <= 640 and y + h <= 360
+
+
+def test_webcam_against_the_frame_side_reaches_it_past_the_shelves():
+    # The webcam sits in the top-left corner (x 0-200, y 80-200): no game on its
+    # left, and a shelf edge inside it at x 60. Its left side is the frame edge.
+    rng = np.random.default_rng(5)
+    room = np.full((120, 200), 70.0, dtype=np.float32)
+    room[:, 60:] = 150.0
+    frames = []
+    for _ in range(24):
+        game = rng.uniform(0, 255, size=(360, 640)).astype(np.float32)
+        game = (game + np.roll(game, 1, axis=1) + np.roll(game, 1, axis=0)) / 3
+        game[80:200, 0:200] = room
+        frames.append(game)
+    face = (110.0, 100.0, 36.0, 36.0)
+    (x, y, w, h), _ = wd.webcam_edges(np.stack(frames), face, wd.box_around_face(face, 640, 360))
+    assert x == 0
+    assert abs((x + w) - 200) <= 2

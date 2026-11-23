@@ -29,7 +29,7 @@ from .common import (
     logger,
 )
 from .face_detection import open_haar_cascade, open_yunet_detector
-from .webcam_detection import detect_webcam_box
+from .webcam_detection import detect_webcam_box, find_steady_face
 from .ffmpeg import (
     build_audio_output_args,
     build_final_video_encode_args,
@@ -779,13 +779,31 @@ def detect_letterbox_rows(clip_path: Path, width: int, height: int) -> Optional[
         return None
 
 
-def gameplay_regions_from_box(
-    width: int, height: int, box: Dict[str, float]
-) -> Optional[Dict[str, Dict[str, int]]]:
-    """Gameplay regions from a user-picked facecam box (0-1 fractions).
+# Where the face sits in the webcam tile: centred across, a bit above the middle
+# (room for the shoulders). To get there the crop may zoom into the webcam box,
+# down to this share of the largest crop that fits it.
+CAM_FACE_Y = 0.42
+# Height is less important than centring across: the crop only zooms in to keep
+# the face between these heights.
+CAM_FACE_Y_RANGE = (0.35, 0.6)
+CAM_MIN_CROP_SHARE = 0.7
+# ...but never so tight that the head fills the tile.
+CAM_MIN_FACE_WIDTHS = 2.6
 
-    The box is cover-fitted to the top tile's aspect around its centre, so the
-    facecam fills the tile without stretching or pulling in game pixels.
+
+def gameplay_regions_from_box(
+    width: int,
+    height: int,
+    box: Dict[str, float],
+    face: Optional[Tuple[float, float, float, float]] = None,
+) -> Optional[Dict[str, Dict[str, int]]]:
+    """Gameplay regions from a facecam box (0-1 fractions).
+
+    The box is cover-fitted to the top tile's aspect, so the facecam fills the
+    tile without stretching or pulling in game pixels. With the streamer's
+    ``face`` (x, y, w, h in source pixels, or ``box["face"]`` as fractions) the
+    crop is placed, and if needed tightened a little, so the face is centred;
+    otherwise it is centred on the box.
     """
     if width <= 0 or height <= 0:
         return None
@@ -794,13 +812,30 @@ def gameplay_regions_from_box(
     if bw < 16 or bh < 16:
         return None
     cam_aspect = 1080 / GAMEPLAY_CAM_H
-    if bw / bh > cam_aspect:
-        cw, ch = bh * cam_aspect, bh
-    else:
-        cw, ch = bw, bw / cam_aspect
-    cw_i = max(2, min(round_to_even(int(cw)), round_to_even(width)))
-    ch_i = max(2, min(round_to_even(int(cw_i / cam_aspect)), round_to_even(height)))
+    fit_w = min(bw, bh * cam_aspect)
     cx, cy = bx + bw / 2, by + bh / 2
+    crop_w = fit_w
+    if face is None and isinstance(box.get("face"), dict):
+        f = box["face"]
+        face = (f["x"] * width, f["y"] * height, f["w"] * width, f["h"] * height)
+    if face is not None:
+        fx, fy, fw, fh = face
+        fcx, fcy = fx + fw / 2, fy + fh / 2
+        if bx <= fcx <= bx + bw and by <= fcy <= by + bh:
+            # Largest crop that keeps the face centred across and at a good height.
+            low, high = CAM_FACE_Y_RANGE
+            centred_w = min(
+                fit_w,
+                2 * min(fcx - bx, bx + bw - fcx),
+                cam_aspect * min((fcy - by) / low, (by + bh - fcy) / (1 - high)),
+            )
+            crop_w = min(fit_w, max(centred_w, fit_w * CAM_MIN_CROP_SHARE, fw * CAM_MIN_FACE_WIDTHS))
+            crop_h = crop_w / cam_aspect
+            # Centre on the face, then slide back inside the box where it must.
+            cx = min(max(fcx, bx + crop_w / 2), bx + bw - crop_w / 2)
+            cy = min(max(fcy - CAM_FACE_Y * crop_h + crop_h / 2, by + crop_h / 2), by + bh - crop_h / 2)
+    cw_i = max(2, min(round_to_even(int(crop_w)), round_to_even(width)))
+    ch_i = max(2, min(round_to_even(int(cw_i / cam_aspect)), round_to_even(height)))
     return {
         "cam": {
             "x": clamp_even(int(cx - cw_i / 2), 0, max(0, width - cw_i)),
@@ -827,11 +862,25 @@ def auto_gameplay_regions(
     if found and found.get("box"):
         x, y, w, h = found["box"]
         return gameplay_regions_from_box(
-            width, height, {"x": x / width, "y": y / height, "w": w / width, "h": h / height}
+            width,
+            height,
+            {"x": x / width, "y": y / height, "w": w / width, "h": h / height},
+            found.get("face"),
         )
     duration = ffprobe_duration(clip_path)
     faces = detect_faces_in_clip(clip_path, 0, min(duration, 12.0))
     return compute_gameplay_regions(width, height, faces)
+
+
+def _face_for_region(clip_path: Path, region: Dict[str, Any]):
+    """The steady face for a webcam box that does not carry one (picked by hand)."""
+    if isinstance(region.get("face"), dict):
+        return None  # gameplay_regions_from_box reads it from the box
+    try:
+        return find_steady_face(clip_path)
+    except Exception as exc:
+        logger.debug("No face for the picked webcam box: %s", exc)
+        return None
 
 
 def detect_gameplay_plan(
@@ -846,7 +895,9 @@ def detect_gameplay_plan(
         if width / max(height, 1) <= 1.2:
             return None
         regions = (
-            gameplay_regions_from_box(width, height, webcam_region)
+            gameplay_regions_from_box(
+                width, height, webcam_region, _face_for_region(clip_path, webcam_region)
+            )
             if webcam_region
             else None
         )

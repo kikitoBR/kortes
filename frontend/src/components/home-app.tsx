@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { Kbd } from "@/components/ui/kbd";
 import { useSession } from "@/lib/auth-client";
 import { useBillingSummary } from "@/hooks/use-billing-summary";
-import { formatBillingPlanName, isPaidBillingPlan } from "@/lib/billing-plans";
+import { formatBillingPlanName, formatMinutes, isPaidBillingPlan } from "@/lib/billing-plans";
 import { track } from "@/lib/datafast";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import { buildFontOptionsPayload, FONT_TEMPLATE_DEFAULT_VALUE } from "@/lib/font-options";
@@ -382,7 +382,7 @@ export default function HomeApp() {
   const limitNote = !billingSummary?.max_youtube_duration_seconds
     ? null
     : isDesktop
-    ? `Vídeos do YouTube de até ${billingSummary.max_youtube_duration_seconds / 60} minutos.`
+    ? `Vídeos do YouTube de até ${formatMinutes(Math.round(billingSummary.max_youtube_duration_seconds / 60))}.`
     : `${formatBillingPlanName(billingSummary.plan)}: vídeos do YouTube de até ${billingSummary.max_youtube_duration_seconds / 60} minutos. Verificamos a duração antes de consumir créditos.`;
 
   return (

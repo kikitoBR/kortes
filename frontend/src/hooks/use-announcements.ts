@@ -7,9 +7,8 @@ import { isDesktop } from "@/lib/edition";
 let pending: Promise<Announcement[] | null> | null = null;
 
 function loadAnnouncements() {
-  // Kortes Desktop has no announcements.
-  if (isDesktop) return Promise.resolve(null);
-  pending ??= fetch("/api/announcements", { cache: "no-store" })
+  // Kortes Desktop reads them from the Kortes site, through the local backend.
+  pending ??= fetch(isDesktop ? "/api/desktop/announcements" : "/api/announcements", { cache: "no-store" })
     .then(async response => response.ok ? ((await response.json()) as { announcements: Announcement[] }).announcements : null)
     .catch(() => null)
     .finally(() => { pending = null; });

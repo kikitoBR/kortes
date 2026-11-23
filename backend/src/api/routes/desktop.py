@@ -1,6 +1,8 @@
 """Kortes Desktop setup: the license and the AssemblyAI key (only in the desktop edition)."""
 
 import logging
+import re
+import time
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...auth_headers import resolve_authenticated_user_id
 from ...config import get_config
 from ...database import get_db
-from ...desktop import SetupError, check_assemblyai_key, check_license, save_settings
+from ...desktop import SetupError, check_assemblyai_key, check_license, save_settings, site_request
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,16 @@ router = APIRouter(prefix="/desktop", tags=["desktop"])
 
 class KeyPayload(BaseModel):
     key: str
+
+
+class SupportPayload(BaseModel):
+    category: str = "support"
+    message: str
+    contact: str = ""
+
+
+class SupportReply(BaseModel):
+    message: str
 
 
 def _error(exc: SetupError) -> JSONResponse:
@@ -101,3 +113,73 @@ async def remove_assemblyai(request: Request, db: AsyncSession = Depends(get_db)
     await resolve_authenticated_user_id(request, db, config)
     await save_settings(db, {"ASSEMBLY_AI_API_KEY": None})
     return {"assemblyai": {"configured": False}}
+
+
+# Support and "Novidades": relayed to the Kortes site with this PC's license.
+
+_announcements_cache: dict = {"until": 0.0, "items": []}
+ANNOUNCEMENTS_CACHE_SECONDS = 300
+
+
+@router.get("/announcements")
+async def get_announcements(request: Request, db: AsyncSession = Depends(get_db)):
+    """Published announcements. When the site is unreachable, the last list (or none)."""
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    now = time.monotonic()
+    if _announcements_cache["until"] > now:
+        return {"announcements": _announcements_cache["items"]}
+    status, body = await site_request("GET", "/announcements", site_url=config.kortes_site_url, license_key=None)
+    if status == 200 and isinstance(body, dict) and isinstance(body.get("announcements"), list):
+        _announcements_cache.update(until=now + ANNOUNCEMENTS_CACHE_SECONDS, items=body["announcements"])
+    else:
+        _announcements_cache["until"] = now + 60
+    return {"announcements": _announcements_cache["items"]}
+
+
+def _relay(status: int, body) -> JSONResponse:
+    return JSONResponse(body if isinstance(body, dict) else {"detail": "Resposta inválida do servidor do Kortes."}, status_code=status)
+
+
+def _no_license() -> JSONResponse:
+    return JSONResponse(
+        {"detail": "Ative sua licença em Configurações para falar com o suporte.", "code": "license_missing"},
+        status_code=400,
+    )
+
+
+@router.get("/support")
+async def list_support(request: Request, db: AsyncSession = Depends(get_db)):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    if not config.openai_api_key:
+        return _no_license()
+    return _relay(*await site_request(
+        "GET", "/support", site_url=config.kortes_site_url, license_key=config.openai_api_key
+    ))
+
+
+@router.post("/support")
+async def create_support(payload: SupportPayload, request: Request, db: AsyncSession = Depends(get_db)):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    if not config.openai_api_key:
+        return _no_license()
+    return _relay(*await site_request(
+        "POST", "/support", site_url=config.kortes_site_url, license_key=config.openai_api_key,
+        payload=payload.model_dump(),
+    ))
+
+
+@router.post("/support/{thread_id}/messages")
+async def reply_support(thread_id: str, payload: SupportReply, request: Request, db: AsyncSession = Depends(get_db)):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    if not config.openai_api_key:
+        return _no_license()
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", thread_id):
+        return JSONResponse({"detail": "Conversa não encontrada."}, status_code=404)
+    return _relay(*await site_request(
+        "POST", f"/support/{thread_id}/messages", site_url=config.kortes_site_url,
+        license_key=config.openai_api_key, payload=payload.model_dump(),
+    ))

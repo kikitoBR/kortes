@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowRight, Megaphone, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Megaphone, X } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAnnouncements } from "@/hooks/use-announcements";
 import { cn } from "@/lib/utils";
 
 const READ_EVENT = "supoclip:announcements-read";
+const linkClass = "inline-flex items-center gap-1.5 text-sm font-medium text-brand underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const memoryRead = new Map<string, string[]>();
 
 function readIds(key: string): string[] {
@@ -104,10 +105,17 @@ export function Announcements({ userId, compact = false, landing = false }: {
                 {new Date(item.publishedAt).toLocaleDateString("pt-BR", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}
               </time>
               <h3 className="font-semibold leading-snug">{item.title}</h3>
-              <p className="text-sm leading-relaxed text-muted-foreground">{item.description}</p>
-              <Link href={item.href} onClick={() => setOpen(false)} className="inline-flex items-center gap-1.5 text-sm font-medium text-brand underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                {item.action}<ArrowRight className="size-3.5" aria-hidden />
-              </Link>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{item.description}</p>
+              {item.href && /^https:\/\//.test(item.href) ? (
+                // Kortes Desktop opens outside links in the browser.
+                <a href={item.href} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)} className={linkClass}>
+                  {item.action || "Abrir"}<ArrowUpRight className="size-3.5" aria-hidden />
+                </a>
+              ) : item.href ? (
+                <Link href={item.href} onClick={() => setOpen(false)} className={linkClass}>
+                  {item.action || "Abrir"}<ArrowRight className="size-3.5" aria-hidden />
+                </Link>
+              ) : null}
             </article>
           ))}
         </div>

@@ -36,6 +36,13 @@ def test_the_web_edition_is_unchanged(monkeypatch):
     assert config.transcription_fallback == ""
 
 
+def test_desktop_accepts_videos_up_to_ten_hours(monkeypatch):
+    monkeypatch.delenv("MAX_VIDEO_DURATION", raising=False)
+
+    assert make_config(monkeypatch).max_video_duration == 36000
+    assert make_config(monkeypatch, edition="web").max_video_duration == 5400
+
+
 def test_the_device_id_is_stable_and_hashed(monkeypatch, tmp_path):
     monkeypatch.delenv("KORTES_DEVICE_ID", raising=False)
     monkeypatch.setenv("KORTES_DATA_DIR", str(tmp_path))
@@ -195,3 +202,51 @@ def test_desktop_ai_calls_carry_the_device(monkeypatch, tmp_path):
     client = model.client if hasattr(model, "client") else model._provider.client
     assert client.default_headers["x-kortes-device"] == desktop.device_id()
     assert str(client.base_url).startswith("https://gemini.kikito.site/v1")
+
+
+async def test_site_requests_carry_the_license_device_and_version(monkeypatch, tmp_path):
+    monkeypatch.setenv("KORTES_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("KORTES_APP_VERSION", "0.2.0")
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(url=str(request.url), headers=request.headers, body=request.content)
+        return httpx.Response(201, json={"threads": [], "id": "t1"})
+
+    status, body = await desktop.site_request(
+        "POST", "/support", site_url="https://kortes.test", license_key="kl_abc",
+        payload={"category": "bug", "message": "oi"}, transport=httpx.MockTransport(handler),
+    )
+
+    assert status == 201 and body["id"] == "t1"
+    assert seen["url"] == "https://kortes.test/api/v1/support"
+    assert seen["headers"]["authorization"] == "Bearer kl_abc"
+    assert seen["headers"]["x-kortes-device"] == desktop.device_id()
+    assert seen["headers"]["x-kortes-version"] == "0.2.0"
+
+
+async def test_an_unreachable_site_is_a_clear_502(monkeypatch, tmp_path):
+    monkeypatch.setenv("KORTES_DATA_DIR", str(tmp_path))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    status, body = await desktop.site_request(
+        "GET", "/announcements", site_url="https://kortes.test", license_key=None,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert status == 502
+    assert "internet" in body["detail"]
+
+
+def test_desktop_serves_support_and_announcements(monkeypatch):
+    paths = route_paths(make_config(monkeypatch))
+
+    assert {"/desktop/announcements", "/desktop/support", "/desktop/support/{thread_id}/messages"} <= paths
+
+
+def test_the_site_url_defaults_to_kortes(monkeypatch):
+    monkeypatch.delenv("KORTES_SITE_URL", raising=False)
+
+    assert make_config(monkeypatch).kortes_site_url == "https://kortes.com.br"

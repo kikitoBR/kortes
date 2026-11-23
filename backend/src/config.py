@@ -113,7 +113,11 @@ class Config:
             env_or_default("APIFY_LONG_VIDEO_SECONDS", "1800")
         )
 
-        self.max_video_duration = int(env_or_default("MAX_VIDEO_DURATION", "5400"))
+        # Kortes Desktop runs on the customer's PC: 10 h, the license's token quota is the real limit.
+        desktop_edition = (os.getenv("KORTES_EDITION") or "").strip().lower() == "desktop"
+        self.max_video_duration = int(
+            env_or_default("MAX_VIDEO_DURATION", "36000" if desktop_edition else "5400")
+        )
         # YouTube sources can be longer on paid tiers. Uploads continue to use
         # max_video_duration regardless of plan.
         self.pro_youtube_max_video_duration = int(
@@ -183,6 +187,10 @@ class Config:
         self.desktop = self.edition == "desktop"
         self.license_server_url = (
             os.getenv("KORTES_LICENSE_URL") or "https://gemini.kikito.site/v1"
+        ).strip().rstrip("/")
+        # Support messages and announcements ("Novidades") live on the Kortes site.
+        self.kortes_site_url = (
+            os.getenv("KORTES_SITE_URL") or "https://kortes.com.br"
         ).strip().rstrip("/")
         self.transcription_fallback = (
             os.getenv("TRANSCRIPTION_FALLBACK") or ("whisper" if self.desktop else "")

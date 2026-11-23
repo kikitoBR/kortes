@@ -133,7 +133,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </button>
 
         <div className="mt-auto w-full space-y-2 pb-3">
-          {isDesktop ? null : <Announcements key={user.id} userId={user.id} compact={compact} />}
+          <Announcements key={user.id} userId={user.id} compact={compact} />
           {!compact && billing?.monetization_enabled && <UsageCard billing={billing} />}
           {isDesktop ? null : <UserRow compact={compact} name={user.name} email={user.email} />}
         </div>

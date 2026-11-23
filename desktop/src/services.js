@@ -219,6 +219,8 @@ class Services {
       LOG_DIR: path.join(layout.logsDir, "backend"),
       KORTES_DEVICE_ID: layout.machineId || "",
       KORTES_LICENSE_URL: process.env.KORTES_LICENSE_URL || "https://gemini.kikito.site/v1",
+      KORTES_SITE_URL: process.env.KORTES_SITE_URL || "https://kortes.com.br",
+      KORTES_APP_VERSION: require("electron").app.getVersion(),
       DATABASE_URL: this.databaseUrl(secrets, "postgresql+asyncpg"),
       REDIS_HOST: "127.0.0.1",
       REDIS_PORT: String(this.ports.redis),

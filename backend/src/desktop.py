@@ -73,6 +73,36 @@ def device_headers() -> dict[str, str]:
     return {DEVICE_HEADER: device_id()}
 
 
+async def site_request(
+    method: str,
+    path: str,
+    *,
+    site_url: str,
+    license_key: Optional[str],
+    payload: Optional[dict[str, Any]] = None,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> tuple[int, Any]:
+    """Call the Kortes site (support messages, announcements) as this customer.
+
+    The site checks the license with the license server and keeps only its hash.
+    Returns (status, JSON body); an unreachable site is a 502 with a message.
+    """
+    headers = {**device_headers(), "x-kortes-version": os.getenv("KORTES_APP_VERSION", "")}
+    if license_key:
+        headers["Authorization"] = f"Bearer {license_key}"
+    try:
+        async with httpx.AsyncClient(transport=transport, timeout=CHECK_TIMEOUT_SECONDS) as client:
+            response = await client.request(method, f"{site_url}/api/v1{path}", headers=headers, json=payload)
+    except httpx.HTTPError as exc:
+        logger.warning("Kortes site unreachable: %s", exc)
+        return 502, {"detail": "Não deu para falar com o servidor do Kortes. Confira a internet e tente de novo."}
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"detail": f"O servidor do Kortes respondeu com erro {response.status_code}."}
+    return response.status_code, body
+
+
 @dataclass
 class LicenseInfo:
     name: str

@@ -7,6 +7,7 @@ import { DataFastIdentity } from "@/components/datafast-identity";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FeedbackButton } from "@/components/feedback-button";
+import { DesktopSupport } from "@/components/desktop/desktop-support";
 import { getSiteUrl } from "@/lib/site";
 import { isDesktop } from "@/lib/edition";
 
@@ -108,7 +109,7 @@ export default function RootLayout({
       >
         <TooltipProvider>
           {children}
-          {isDesktop ? null : (
+          {isDesktop ? <DesktopSupport /> : (
             <>
               <DataFastIdentity />
               <AttributionTracker />

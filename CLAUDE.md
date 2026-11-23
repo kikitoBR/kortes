@@ -139,6 +139,12 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   user, created by `getServerSession`), `src/middleware.ts` sends web-only pages home and 404s their API routes,
   no analytics/attribution/feedback/announcements, `/setup` first-run page (license, then AssemblyAI or Whisper),
   the same cards in Configurações.
+- **Support and "Novidades":** the floating support button (`components/desktop/desktop-support.tsx`) and the
+  announcements go through `/desktop/support*` and `/desktop/announcements` (`desktop.site_request`) to the Kortes
+  site (`KORTES_SITE_URL`, default `https://kortes.com.br`) with the license, device id and `KORTES_APP_VERSION`.
+  The site is `site/` (Next.js on Vercel, Postgres): `/api/v1/*` for the app, `/painel` (password
+  `ADMIN_PASSWORD`) to answer messages and publish announcements. See `site/README.md`.
+- Videos up to 10 h (`MAX_VIDEO_DURATION` defaults to 36000 in desktop mode).
 - **Try it:** `docker compose -p kortes-desktop -f docker-compose.yml -f docker-compose.desktop.yml up -d --build
   postgres redis backend worker frontend` → http://localhost:3207 (own containers, ports, network and volumes).
 

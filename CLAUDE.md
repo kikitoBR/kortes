@@ -18,7 +18,7 @@ docker-compose logs -f worker     # Debug video processing
 docker-compose down               # Stop all services
 ```
 
-Services: Frontend (:3107), Backend API (:8000, docs at /docs), Worker (ARQ), Live worker (ARQ, queue `supoclip_live`), PostgreSQL (:5432), Redis (:6379)
+Services: Frontend (:3107), Backend API (:8000, docs at /docs), Worker (ARQ), Render worker (ARQ, queue `supoclip_render`), Live worker (ARQ, queue `supoclip_live`), PostgreSQL (:5432), Redis (:6379)
 
 ### Backend (local)
 
@@ -34,6 +34,9 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
 # Worker process (required for video processing)
 arq src.workers.tasks.WorkerSettings
+
+# Render worker (renders the clips when CLIP_RENDER_QUEUE=true; compose sets it)
+arq src.workers.render.RenderWorkerSettings
 ```
 
 ### Frontend (local)
@@ -92,8 +95,9 @@ utils/               → Thread pool helpers for blocking operations (async_help
    - Optional transition effects (`backend/transitions/`)
    - Optional B-roll overlays (Pexels API)
    - Caption templates with animation styles
-5. **Review** → `CLIP_REVIEW_ENABLED` (default on): one AI call per clip (`ai.review_clip`, rules in `clip_review.py`, from SHARINGAN) reads the transcript before/inside/after with peaks; weak hook → new teaser, missing context → start up to 15 s earlier, dead start → up to 8 s later, cut ending → up to 8 s later, weak title → new `hook_title`. It reads only the transcript, so it runs **before** the render (`TaskService._review_segment`, also in the live worker) and its fixes go into the one render; any failure keeps the chosen moment. Audio is levelled to -14 LUFS in two passes (`loudnorm_filter_for`). The final encode is libx264 `veryfast` CRF 18 (`FINAL_VIDEO_PRESET`/`FINAL_VIDEO_CRF` in `media/common.py`): measured equal to the old `medium` CRF 19 in about half the time
+5. **Review** → `CLIP_REVIEW_ENABLED` (default on): one AI call per clip (`ai.review_clip`, rules in `clip_review.py`, from SHARINGAN) reads the transcript before/inside/after with peaks; weak hook → new teaser, missing context → start up to 15 s earlier, dead start → up to 8 s later, cut ending → up to 8 s later, weak title → new `hook_title`. It reads only the transcript, so it runs **before** the render (`TaskService._review_segment`, also in the live worker) and its fixes go into the one render; any failure keeps the chosen moment. Audio is levelled to -14 LUFS in two passes (`loudnorm_filter_for`). The final encode is libx264 `veryfast` CRF 18 (`FINAL_VIDEO_PRESET`/`FINAL_VIDEO_CRF` in `media/common.py`): measured equal to the old `medium` CRF 19 in about half the time. The intermediate cut it starts from is `ultrafast` CRF 12 (`INTERMEDIATE_PRESET`): 2.7x faster than `veryfast` CRF 16 at the same SSIM
 6. **Storage** → Clips to `{TEMP_DIR}/clips/`, metadata to PostgreSQL. Each clip is saved and pushed to the page (SSE `clip_ready`) as soon as it renders; a failed clip is skipped and counted in the progress line. A rerun of the same task (worker restart, "Retomar") keeps clips already rendered for the same moments (`reusable_clip_ids` in `task_service.py`)
+7. **Render queue** → with `CLIP_RENDER_QUEUE=true` (set by docker-compose) the task's job stops after the analysis and hands the moments to `services/clip_render_queue.py`: a plan in Redis (`render_plan:{task}`, with a run id) and one arq job `render_clip` per clip on queue `supoclip_render`, served by the `render-worker` service (`workers/render.py`, `RENDER_MAX_JOBS` default 1: one clip gets the whole machine). Each clip job queues the task's next clip when it starts, so a task keeps one clip waiting and users' tasks take turns clip by clip. The last clip completes the task (email, source cleanup, show end). A worker that vanishes loses nothing: arq reruns a job cancelled by shutdown, and a crashed worker's job after `RENDER_JOB_TIMEOUT_SECONDS`; a per-clip Redis claim keeps a rerun from saving the clip twice; a job from an older run ("Retomar") does nothing. Helper machines run only the render worker against the same Redis, PostgreSQL and media storage
 
 ### Live clipping (`src/live/`, `workers/live.py`)
 
@@ -254,6 +258,9 @@ YOUTUBE_PARTIAL_DOWNLOAD=true        # Long videos: audio first, then each clip'
 YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS=1200
 CLIP_REVIEW_ENABLED=true             # One AI review per clip, before it is rendered
 EDITOR_PREFETCH_CLIPS=2              # Clips after the opened one prepared ahead for the editor (0 = off)
+CLIP_RENDER_QUEUE=true               # One render job per clip on the render worker (compose default true; bare default false)
+RENDER_MAX_JOBS=1                    # Clips one render worker makes at once
+RENDER_JOB_TIMEOUT_SECONDS=1800      # Also how long a vanished worker's clip waits before another worker takes it
 LIVE_CLIPPING_ENABLED=true           # Live links are recorded and clipped while they stream
 LIVE_MAX_CONCURRENT=2                # Lives recorded at once (live-worker max_jobs)
 LIVE_PIECE_SECONDS=30                # Recording piece length

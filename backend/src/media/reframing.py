@@ -1410,6 +1410,7 @@ def build_vertical_filter_plan(
     height: int,
     speaker_turns: Optional[List[Dict[str, Any]]] = None,
     speaker_words: Optional[List[Dict[str, Any]]] = None,
+    speaker_chain_tried: bool = False,
 ) -> Tuple[str, str]:
     """Build the 9:16 reframing filter for the default vertical mode.
 
@@ -1419,6 +1420,8 @@ def build_vertical_filter_plan(
     so tweets / graphs / slides are shown in full instead of being cropped.
     With diarized speaker turns, multi-person wide shots cut to whoever is
     talking (see ``speaker_framing``); otherwise the dominant face is tracked.
+    ``speaker_chain_tried`` means the caller already ran that speaker analysis
+    on this clip and it found nobody to cut to, so it is not decoded again.
     """
     crop_w, crop_h = compute_vertical_crop_dims(width, height)
     duration = ffprobe_duration(input_path)
@@ -1457,7 +1460,7 @@ def build_vertical_filter_plan(
     # Decide the layout over time. All-face clips skip the compositor (cheaper).
     plan = build_layout_plan(track, scene_cuts, duration)
     fit_intervals = [(s["start"], s["end"]) for s in plan if s["kind"] == "fit"]
-    if not fit_intervals and speaker_words:
+    if not fit_intervals and speaker_words and not speaker_chain_tried:
         # All-face clip with diarized speech: cut to whoever is talking on
         # multi-person wide shots (a single voice holds the face that talks,
         # not the biggest one). Clips with content shots keep the compositor
@@ -1584,7 +1587,9 @@ def render_reframed_clip_ffmpeg(
         else:
             logger.info("No facecam found for gameplay layout; using default vertical framing")
 
+    speaker_chain_tried = False
     if output_format == "vertical_pan" and speaker_words:
+        speaker_chain_tried = True
         speaker_chain = build_diarized_speaker_chain(
             input_path, width, height, speaker_turns, speaker_words
         )
@@ -1652,7 +1657,8 @@ def render_reframed_clip_ffmpeg(
     # Default "vertical": scene-aware — tracked crop for face shots, blurred-
     # background full-frame fit for content shots (tweets/graphs/slides).
     video_filter, mode = build_vertical_filter_plan(
-        input_path, width, height, speaker_turns, speaker_words
+        input_path, width, height, speaker_turns, speaker_words,
+        speaker_chain_tried=speaker_chain_tried,
     )
     if mode == "complex":
         if subs:

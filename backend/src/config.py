@@ -166,6 +166,11 @@ class Config:
             env_or_default("PROCESSING_TASK_TIMEOUT_SECONDS", "14400")
         )
 
+        # One render job per clip on the render queue (served by the
+        # render-worker service and any helper machines) instead of rendering
+        # every clip inside the task's own job.
+        self.clip_render_queue = self._get_bool_env("CLIP_RENDER_QUEUE", False)
+
         self.self_host = self._get_bool_env("SELF_HOST", True)
         self.monetization_enabled = not self.self_host
         self.backend_auth_secret = self._get_optional_env("BACKEND_AUTH_SECRET")

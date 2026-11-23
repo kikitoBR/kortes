@@ -173,7 +173,14 @@ FINAL_VIDEO_CRF = 18
 
 FINAL_VIDEO_PRESET = "veryfast"
 
-INTERMEDIATE_CRF = 16
+# The intermediate cut is decoded for analysis and re-encoded by the final pass,
+# so it only has to be fast and near-lossless. ultrafast at CRF 12 measured
+# 2.7x faster than veryfast at CRF 16 with a slightly higher SSIM (0.9960 vs
+# 0.9959 on a 1080x1920 clip) and the same decode speed; the temp file is ~4x
+# bigger and is deleted with the render directory.
+INTERMEDIATE_PRESET = "ultrafast"
+
+INTERMEDIATE_CRF = 12
 
 OUTPUT_FPS = 30
 

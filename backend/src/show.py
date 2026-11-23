@@ -130,6 +130,12 @@ class ShowReporter:
         except Exception:
             logger.debug("Show state publish failed", exc_info=True)
 
+    async def load(self) -> "ShowReporter":
+        """Continue the task's published show (a render job of its own)."""
+        state = await read_show_state(self.redis, self.task_id)
+        self.state["queue"] = state.get("queue") or []
+        return self
+
     async def start_clip(self, index: int, total: int, segment: Dict[str, Any], layout: str) -> None:
         old = self.clip_dir
         self.clip_key = f"c{index + 1:03d}-{uuid.uuid4().hex[:8]}"

@@ -339,6 +339,11 @@ services:
       - SPEAKER_FRAMING=${SPEAKER_FRAMING:-true}
       - HOOK_FIRST_TEASER=${HOOK_FIRST_TEASER:-true}
       - CLIP_REVIEW_ENABLED=${CLIP_REVIEW_ENABLED:-true}
+      # Clips render as jobs of their own on the render queue, served by
+      # render-worker (and helper machines). false = inside the task's job.
+      - CLIP_RENDER_QUEUE=${CLIP_RENDER_QUEUE:-true}
+      - RENDER_MAX_JOBS=${RENDER_MAX_JOBS:-1}
+      - RENDER_JOB_TIMEOUT_SECONDS=${RENDER_JOB_TIMEOUT_SECONDS:-1800}
       - EDITOR_PREFETCH_CLIPS=${EDITOR_PREFETCH_CLIPS:-2}
       - LIVE_CLIPPING_ENABLED=${LIVE_CLIPPING_ENABLED:-true}
       - LIVE_MAX_CONCURRENT=${LIVE_MAX_CONCURRENT:-2}
@@ -390,6 +395,21 @@ services:
 
     healthcheck:
       test: ["CMD", ".venv/bin/arq", "--check", "src.workers.tasks.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Clip renders: one clip at a time from the render queue, so each clip gets
+  # the whole machine and tasks of different users take turns clip by clip.
+  # A helper machine runs this same command against the same Redis, database
+  # and media storage.
+  render-worker:
+    <<: *worker-service
+    container_name: supoclip-render-worker
+    command: [".venv/bin/arq", "src.workers.render.RenderWorkerSettings"]
+    healthcheck:
+      test: ["CMD", ".venv/bin/arq", "--check", "src.workers.render.RenderWorkerSettings"]
       interval: 30s
       timeout: 10s
       retries: 3

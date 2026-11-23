@@ -21,6 +21,7 @@ from ..repositories.cache_repository import CacheRepository
 from .video_service import VideoService
 from .clip_source import ClipSource
 from .clip_service import ClipEditingMixin
+from .clip_render_queue import RENDER_PROGRESS_START, QueuedClipRenderMixin
 from ..repositories.edit_transaction import serialized_task_edit, task_edit_transaction, TaskCancelled
 from ..repositories.task_run_guard import exclusive_task_run, task_run_guard
 from .billing_service import BillingService
@@ -86,7 +87,7 @@ def clip_review_message(index: int, total: int) -> str:
     return f"Revisando o clipe {index + 1} de {total}..."
 
 
-class TaskService(ClipEditingMixin):
+class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
     """Service for task workflow orchestration."""
 
     def __init__(self, db: AsyncSession, config: Config | None = None):
@@ -173,6 +174,32 @@ class TaskService(ClipEditingMixin):
             else datetime.utcnow()
         )
         return (now - updated_at).total_seconds()
+
+    _add_review_note = staticmethod(add_review_note)
+
+    async def _create_clip_row(
+        self, task_id: str, clip_info: Dict[str, Any], index: int
+    ) -> str:
+        return await self.clip_repo.create_clip(
+            self.db,
+            task_id=task_id,
+            filename=clip_info["filename"],
+            file_path=clip_info["path"],
+            start_time=clip_info["start_time"],
+            end_time=clip_info["end_time"],
+            duration=clip_info["duration"],
+            text=clip_info.get("text", ""),
+            relevance_score=clip_info.get("relevance_score", 0.0),
+            reasoning=clip_info.get("reasoning", ""),
+            clip_order=index + 1,
+            virality_score=clip_info.get("virality_score", 0),
+            hook_score=clip_info.get("hook_score", 0),
+            engagement_score=clip_info.get("engagement_score", 0),
+            value_score=clip_info.get("value_score", 0),
+            shareability_score=clip_info.get("shareability_score", 0),
+            hook_type=clip_info.get("hook_type"),
+            hook_title=clip_info.get("hook_title"),
+        )
 
     async def _review_segment(
         self,
@@ -387,6 +414,9 @@ class TaskService(ClipEditingMixin):
         # in temp/ until the disk fills and later tasks fail.
         video_path: Optional[Path] = None
         pending_clip_path: Optional[Path] = None
+        # Set once the clips go to the render queue: their jobs then own the
+        # source video and the show, so this run must not clean them up.
+        handed_off = False
         clips_output_dir = Path(self.config.temp_dir) / "clips"
 
         async def check_cancelled():
@@ -543,6 +573,45 @@ class TaskService(ClipEditingMixin):
                     "Task %s: keeping %d clip(s) from an earlier run", task_id, len(reused)
                 )
 
+            # Render queue: one job per clip, taken in turns with other tasks'
+            # clips by the render workers (this machine or helpers).
+            if self.config.clip_render_queue and len(reused) < total_clips:
+                await update_progress(
+                    RENDER_PROGRESS_START,
+                    f"{total_clips - len(reused)} clipe(s) na fila de montagem...",
+                )
+                await self._queue_clip_renders(
+                    task_id=task_id,
+                    url=url,
+                    source_type=source_type,
+                    video_path=video_path,
+                    sections=clip_source is not None,
+                    voice_energy=result.get("voice_energy"),
+                    segments=segments_to_render,
+                    reused=reused,
+                    settings={
+                        "font_family": font_family,
+                        "font_size": font_size,
+                        "font_color": font_color,
+                        "caption_template": caption_template,
+                        "output_format": output_format,
+                        "add_subtitles": add_subtitles,
+                        "cleanup_settings": normalized_cleanup_settings,
+                        "webcam_region": webcam_region,
+                        "hook_intro": hook_intro,
+                    },
+                    stage_timings=stage_timings,
+                    show=show_reporter,
+                )
+                handed_off = True
+                return {
+                    "task_id": task_id,
+                    "queued_clips": total_clips - len(reused),
+                    "segments": result["segments"],
+                    "summary": result.get("summary"),
+                    "key_topics": result.get("key_topics"),
+                }
+
             clip_ids = []
             failed_clips = 0
             render_start = perf_counter()
@@ -635,26 +704,7 @@ class TaskService(ClipEditingMixin):
                 async with self._processing_transaction(task_id):
                     await check_cancelled()
                     # Save to DB immediately
-                    clip_id = await self.clip_repo.create_clip(
-                        self.db,
-                        task_id=task_id,
-                        filename=clip_info["filename"],
-                        file_path=clip_info["path"],
-                        start_time=clip_info["start_time"],
-                        end_time=clip_info["end_time"],
-                        duration=clip_info["duration"],
-                        text=clip_info.get("text", ""),
-                        relevance_score=clip_info.get("relevance_score", 0.0),
-                        reasoning=clip_info.get("reasoning", ""),
-                        clip_order=i + 1,
-                        virality_score=clip_info.get("virality_score", 0),
-                        hook_score=clip_info.get("hook_score", 0),
-                        engagement_score=clip_info.get("engagement_score", 0),
-                        value_score=clip_info.get("value_score", 0),
-                        shareability_score=clip_info.get("shareability_score", 0),
-                        hook_type=clip_info.get("hook_type"),
-                        hook_title=clip_info.get("hook_title"),
-                    )
+                    clip_id = await self._create_clip_row(task_id, clip_info, i)
 
                     # Update task's clip IDs array
                     await self.task_repo.update_task_clips(self.db, task_id, [*clip_ids, clip_id])
@@ -775,9 +825,10 @@ class TaskService(ClipEditingMixin):
                     logger.exception("Could not publish task failure for %s", task_id)
             raise
         finally:
-            if show_reporter is not None:
-                await show_reporter.finish()
-            await run_in_thread(self._cleanup_source_video, video_path, source_type, url)
+            if not handed_off:
+                if show_reporter is not None:
+                    await show_reporter.finish()
+                await run_in_thread(self._cleanup_source_video, video_path, source_type, url)
 
     async def _send_completion_notification_if_needed(
         self, *, task_id: str, clips_count: int

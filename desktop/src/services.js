@@ -182,6 +182,13 @@ class Services {
       ["-c", "import sys; from arq.cli import cli; sys.argv=['arq','src.workers.tasks.WorkerSettings']; cli()"],
       { env, cwd: layout.backendDir },
     );
+    // Lives have their own queue (supoclip_live): without this worker they wait in "Na fila" forever.
+    this.spawnService(
+      "live-worker",
+      layout.python,
+      ["-c", "import sys; from arq.cli import cli; sys.argv=['arq','src.workers.live.LiveWorkerSettings']; cli()"],
+      { env, cwd: layout.backendDir },
+    );
 
     this.spawnService("frontend", process.execPath, [layout.frontendServer], {
       cwd: path.dirname(layout.frontendServer),

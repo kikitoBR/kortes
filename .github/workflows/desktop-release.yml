@@ -59,18 +59,35 @@ jobs:
 
       - name: Installer
         working-directory: desktop
+        run: |
+          set -o pipefail
+          { pnpm install --frozen-lockfile && pnpm run dist; } 2>&1 | tee -a ../ci.log
+
+      # Uploaded with gh (electron-builder's own upload once left the 520 MB installer
+      # out without failing). The updater reads latest.yml; the blockmap makes updates small.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: desktop/dist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
+          version="${GITHUB_REF_NAME#v}"
+          files=("KortesSetup-$version.exe" "KortesSetup-$version.exe.blockmap" "latest.yml")
+          for f in "${files[@]}"; do [ -f "$f" ] || { echo "Falta $f" >&2; exit 1; }; done
           {
-            pnpm install --frozen-lockfile
-            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-              pnpm run release
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
             else
-              pnpm run dist
+              gh release create "$GITHUB_REF_NAME" "${files[@]}" --title "Kortes $version" \
+                --notes "Instalador do Kortes para Windows 10/11 (64 bits): baixe KortesSetup-$version.exe."
             fi
-          } 2>&1 | tee -a ../ci.log
+            # Every file must really be there.
+            for f in "${files[@]}"; do
+              gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -qx "$f" \
+                || { echo "Não subiu: $f" >&2; exit 1; }
+            done
+          } 2>&1 | tee -a ../../ci.log
 
       # Logs need a GitHub login; annotations are public, so a failure shows its cause there.
       - name: Show the end of the log

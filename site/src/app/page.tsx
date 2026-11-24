@@ -10,10 +10,17 @@ const geist = Geist({ subsets: ["latin", "latin-ext"], variable: "--font-geist" 
 
 const DOWNLOAD_URL = "https://github.com/kikitoBR/kortes/releases/latest";
 
+const TITLE = "Kortes · Corte a live enquanto ela acontece";
+const DESCRIPTION =
+  "Cole o link da live da Twitch, Kick ou YouTube. A IA do Kortes acha os momentos virais e entrega o corte vertical com legenda e título em minutos. IA inclusa, sem créditos.";
+
+// The share image comes from opengraph-image.jpg / twitter-image.jpg next to this file.
 export const metadata: Metadata = {
-  title: "Kortes · Corte a live enquanto ela acontece",
-  description:
-    "Cole o link da live da Twitch, Kick ou YouTube. A IA do Kortes acha os momentos virais e entrega o corte vertical com legenda e título em minutos. IA inclusa, sem créditos.",
+  metadataBase: new URL("https://kortes.com.br"),
+  title: TITLE,
+  description: DESCRIPTION,
+  openGraph: { type: "website", url: "/", siteName: "Kortes", locale: "pt_BR", title: TITLE, description: DESCRIPTION },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
 };
 
 function Scissors({ size = 28 }: { size?: number }) {

@@ -204,7 +204,7 @@ export function HeroCut() {
       const now = performance.now();
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      shown = shown < 0 ? target : shown + (target - shown) * (1 - Math.exp(-dt * (touch ? 14 : 7)));
+      shown = shown < 0 ? target : shown + (target - shown) * (1 - Math.exp(-dt * (touch ? 5 : 7)));
       if (Math.abs(target - shown) < 0.0004) shown = target;
       const p = shown;
       const mobile = W < 820;

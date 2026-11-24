@@ -72,7 +72,7 @@
 .lp-hero-sticky { position: sticky; top: 0; height: 100vh; height: 100dvh; overflow: hidden; }
 .lp-hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .lp-hero-src { position: absolute; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
-@media (max-width: 820px) { .lp-hero { height: 300vh; } }
+@media (max-width: 820px) { .lp-hero { height: 560vh; } }
 .lp-hero-intro { position: absolute; left: 0; right: 0; top: 13vh; text-align: center; padding: 0 16px; display: flex; flex-direction: column; align-items: center; will-change: transform, opacity; }
 .lp-hero-intro .lp-lead { margin-left: auto; margin-right: auto; }
 .lp-hero-intro .lp-cta-row { justify-content: center; }
@@ -86,7 +86,7 @@
   .lp-hero-intro .lp-cta-row { margin-top: 22px; }
 }
 @media (max-width: 820px) {
-  .lp-hero-intro { top: 9vh; }
+  .lp-hero-intro { top: calc(env(safe-area-inset-top, 0px) + 92px); }
   .lp-hero-intro .lp-lead { font-size: 15px; margin-top: 16px; }
   .lp-scroll-hint { display: none; }
   .lp-hero-intro .lp-cta-row { flex-wrap: nowrap; gap: 8px; margin-top: 20px; }

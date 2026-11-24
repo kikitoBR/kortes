@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_BUILD_DIR || ".next",
   output: 'standalone',
+  // This folder is the project root: a lockfile in a parent folder must not move
+  // server.js deeper into .next/standalone (Docker and the desktop launcher expect it on top).
+  outputFileTracingRoot: process.cwd(),
   typescript: {
     ignoreBuildErrors: false,
   },

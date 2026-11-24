@@ -70,6 +70,14 @@ class LiveOptions:
     hook_intro: Optional[bool] = None
     clip_duration: Optional[str] = "auto"
     max_seconds: int = 4 * 3600
+    # Kortes Desktop free plan: the live's first `max_clips` moments become cuts,
+    # as they happen, with the Kortes watermark; then the recording ends.
+    max_clips: Optional[int] = None
+    watermark: bool = False
+    # "Exigência da IA": None keeps LIVE_MIN_SCORE.
+    min_score: Optional[int] = None
+    # The AI's hook title at the top of the first seconds.
+    title_overlay: bool = True
 
 
 class LiveHooks(Protocol):
@@ -183,8 +191,9 @@ class LiveSession:
         self.piece_seconds = config.live_piece_seconds
         self.buffer_max_seconds = config.live_buffer_max_seconds
         self.interval = config.live_analysis_interval_seconds
-        self.min_score = config.live_min_score
-        self.max_clips = config.live_max_clips
+        self.min_score = options.min_score or config.live_min_score
+        self.max_clips = options.max_clips or config.live_max_clips
+        self.plan_limit_reached = False
         profile = get_clip_duration_profile(options.clip_duration)
         self.min_clip_seconds = float(profile["min_accepted"])
         self.max_clip_seconds = float(profile["max_accepted"])
@@ -427,6 +436,10 @@ class LiveSession:
                 logger.info("Live %s: reached %d clips", self.task_id, self.max_clips)
                 break
             await self.accept(candidate)
+        # The free plan's cuts are all chosen: no need to keep recording the live.
+        if self.options.max_clips and len(self.state["clips"]) >= self.max_clips and not self.ending:
+            self.plan_limit_reached = True
+            await self.finish_recording()
         # Only now may the buffer let go of what this look read.
         self.state["looked_until"] = max(float(self.state["looked_until"]), now)
         self.save()
@@ -517,8 +530,15 @@ class LiveSession:
             head = "Gravação parada · terminando o que já estava em montagem"
         elif self.ending:
             head = "A live acabou. Montando os últimos cortes..."
-            if self.limit_reached:
+            if self.plan_limit_reached:
+                head = (
+                    f"Seus {self.max_clips} cortes grátis desta live estão saindo."
+                    " Assine o Kortes Pro para cortar a live inteira"
+                )
+            elif self.limit_reached:
                 head = "Chegamos ao limite de duração do seu plano. Montando os últimos cortes..."
+        elif self.options.max_clips:
+            head = f"Ao vivo · gravando há {minutes} min · plano grátis: até {self.max_clips} cortes nesta live"
         else:
             head = f"Ao vivo · gravando há {minutes} min"
         parts = [head, f"{self.ready_clips} {'corte' if self.ready_clips == 1 else 'cortes'}"]

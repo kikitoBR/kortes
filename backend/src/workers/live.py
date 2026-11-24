@@ -116,7 +116,7 @@ class ProductionLiveHooks:
         info = await VideoService.create_single_clip(
             timing, segment, index, output_dir, *render_options,
             webcam_region=webcam_region, hook_intro=self.options.hook_intro, clip_source=clip_source,
-            show=self.show,
+            show=self.show, watermark=self.options.watermark, title_overlay=self.options.title_overlay,
         )
         add_review_note(info, note)
         return info
@@ -163,6 +163,9 @@ class ProductionLiveHooks:
                 )
             record = await service.clip_repo.get_clip_by_id(db, clip_id)
         if record:
+            from ..desktop import export_clip
+
+            await export_clip(self.task_id, info["path"], next_order, info.get("hook_title"))
             await self.tracker.clip_ready(next_order - 1, 0, record)
             await self.show.clip(stage="pronto", video_url=record.get("video_url"), filename=record.get("filename"))
         return clip_id
@@ -233,6 +236,11 @@ async def watch_live(
         result = {"status": "error", "clips": 0}
 
     clips, minutes = result.get("clips", 0), round(result.get("recorded_seconds", 0) / 60)
+    # Free plan: the cuts it did not make go back (counted from the saved clips,
+    # so a crash after some cuts never gives those back).
+    from ..desktop import settle_task_free_cuts
+
+    await settle_task_free_cuts(task_id)
     if result["status"] == "cancelled":
         await hooks.show.finish()
         return result

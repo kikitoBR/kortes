@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -212,3 +213,170 @@ async def save_settings(db: AsyncSession, updates: dict[str, Optional[str]]) -> 
             )
     await db.commit()
     await load_runtime_settings_cache(db)
+
+
+
+# ---------------------------------------------------------------- account (kortes.com.br)
+ACCOUNT_TOKEN_SETTING = "KORTES_ACCOUNT_TOKEN"
+
+
+def account_token() -> Optional[str]:
+    """The signed-in account's session token (saved encrypted in app_settings)."""
+    from .runtime_settings import get_cached_setting
+
+    return get_cached_setting(ACCOUNT_TOKEN_SETTING)
+
+
+def source_key(url: str, source_type: str) -> str:
+    """What makes one video or live one free cut: the same source twice is refused."""
+    import datetime
+    import hashlib
+
+    from .youtube_utils import get_youtube_video_id
+
+    url = (url or "").strip()
+    video_id = get_youtube_video_id(url) if source_type in {"youtube", "live"} else None
+    if source_type == "live":
+        # A Twitch/Kick channel is the same link every day: each day's live counts on its own.
+        base = video_id or url.lower().split("?")[0].rstrip("/")
+        return f"live:{base}:{datetime.date.today().isoformat()}"
+    if video_id:
+        return f"yt:{video_id}"
+    if url.startswith("upload://"):
+        return f"file:{hashlib.sha256(url.encode()).hexdigest()[:32]}"
+    return f"url:{hashlib.sha256(url.lower().encode()).hexdigest()[:32]}"
+
+
+FREE_CLIPS_PER_VIDEO = 5
+
+
+async def claim_free_clip(site_url: str, url: str, source_type: str) -> dict:
+    """Ask the site before cutting: paid plans pass, the free plan spends a cut.
+
+    Returns {"pro": bool, "source": key, "clips": n} (n = the free plan's best cuts
+    for this video or live); raises SetupError (402 when the free videos ran out or
+    this one was already cut, 401 when signed out).
+    """
+    # Signed in: the account's session. Not signed in: a kl_ key typed by hand before
+    # accounts existed (the site lets those cut freely, never an account's key).
+    from .config import get_config
+
+    token = account_token() or get_config().openai_api_key
+    if not token:
+        raise SetupError("signed_out", "Entre na sua conta do Kortes em Configurações.", 401)
+    key = source_key(url, source_type)
+    status, body = await site_request("POST", "/clips/claim", site_url=site_url, license_key=token, payload={"source": key})
+    if status != 200:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        code = body.get("code") if isinstance(body, dict) else None
+        raise SetupError(str(code or "claim_failed"), str(detail or "Não deu para conferir o seu plano agora."), status)
+    try:
+        clips = max(1, int(body.get("clips") or FREE_CLIPS_PER_VIDEO))
+    except (TypeError, ValueError):
+        clips = FREE_CLIPS_PER_VIDEO
+    return {"pro": bool(body.get("pro")), "source": key, "clips": clips}
+
+
+async def settle_task_free_cuts(task_id: str, clips: Optional[int] = None) -> None:
+    """A free video or live is done: tell the site how many cuts it really made, so
+    the reserved ones it did not make go back to the balance (none made gives the
+    video back too). ``clips`` defaults to the task's saved clips. Best effort."""
+    from .config import get_config
+
+    config = get_config()
+    if not config.desktop:
+        return
+    try:
+        from .database import AsyncSessionLocal
+        from .repositories.task_repository import TaskRepository
+
+        async with AsyncSessionLocal() as db:
+            metadata = await TaskRepository.load_source_metadata(db, task_id)
+            key = (metadata or {}).get("free_source")
+            if not key:
+                return
+            if clips is None:
+                task = await TaskRepository.get_task_by_id(db, task_id)
+                clips = len((task or {}).get("generated_clips_ids") or [])
+        reserved = (metadata or {}).get("free_clips")
+        if isinstance(reserved, int) and clips >= reserved:
+            return
+        token = account_token()
+        if token:
+            await site_request(
+                "POST", "/clips/settle", site_url=config.kortes_site_url, license_key=token,
+                payload={"source": key, "clips": int(clips)},
+            )
+    except Exception:
+        logger.warning("Could not settle the free cuts of task %s", task_id, exc_info=True)
+
+
+async def release_free_clip(site_url: str, key: str) -> None:
+    """Give a reserved free cut back (the video gave no cut). Best effort."""
+    token = account_token()
+    if token and key:
+        await site_request("POST", "/clips/release", site_url=site_url, license_key=token, payload={"source": key})
+
+
+# ---------------------------------------------------------------- the cuts' folder
+_UNSAFE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+
+def _safe_name(value: str, limit: int) -> str:
+    """A Windows-safe file or folder name (no reserved characters, no trailing dot)."""
+    name = _UNSAFE_NAME.sub(" ", value or "").strip().strip(".")
+    return " ".join(name.split())[:limit].strip() or "Kortes"
+
+
+def copy_clip_to_folder(folder: str, source_title: str, clip_path: str, order: int, title: str) -> Optional[Path]:
+    """Copy one cut to ``folder``/<video title>/<NN - cut title>.mp4, replacing an
+    older version of the same cut (a re-render, a new title)."""
+    import shutil
+
+    clip = Path(clip_path)
+    if not folder or not clip.exists():
+        return None
+    target_dir = Path(folder) / _safe_name(source_title, 80)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{int(order):02d} - "
+    for old in target_dir.glob(f"{prefix}*.mp4"):
+        old.unlink(missing_ok=True)
+    target = target_dir / f"{prefix}{_safe_name(title or f'Corte {order}', 70)}{clip.suffix or '.mp4'}"
+    shutil.copy2(clip, target)
+    return target
+
+
+async def export_clip(task_id: str, clip_path: str, order: int, title: Optional[str] = None) -> None:
+    """Kortes Desktop: a copy of every finished cut goes to the folder picked in
+    Configurações (users.video_defaults.exportDir). Best effort: a full disk or a
+    folder that is gone never fails the cut."""
+    from .config import get_config
+
+    if not get_config().desktop:
+        return
+    try:
+        from sqlalchemy import text as sql_text
+
+        from .database import AsyncSessionLocal
+        from .utils.async_helpers import run_in_thread
+
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    sql_text(
+                        "SELECT u.video_defaults->>'exportDir' AS folder, s.title AS source_title "
+                        "FROM tasks t JOIN users u ON u.id = t.user_id "
+                        "LEFT JOIN sources s ON s.id = t.source_id WHERE t.id = :task_id"
+                    ),
+                    {"task_id": task_id},
+                )
+            ).first()
+        if not row or not row.folder:
+            return
+        target = await run_in_thread(
+            copy_clip_to_folder, row.folder, row.source_title or "Kortes", clip_path, order, title or ""
+        )
+        if target:
+            logger.info("Cut %d of task %s copied to %s", order, task_id, target)
+    except Exception:
+        logger.warning("Could not copy cut %d of task %s to the cuts' folder", order, task_id, exc_info=True)

@@ -12,7 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...auth_headers import resolve_authenticated_user_id
 from ...config import get_config
 from ...database import get_db
-from ...desktop import SetupError, check_assemblyai_key, check_license, save_settings, site_request
+from ...desktop import (
+    ACCOUNT_TOKEN_SETTING,
+    SetupError,
+    account_token,
+    check_assemblyai_key,
+    check_license,
+    save_settings,
+    site_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +29,12 @@ router = APIRouter(prefix="/desktop", tags=["desktop"])
 
 class KeyPayload(BaseModel):
     key: str
+
+
+class AccountPayload(BaseModel):
+    email: str
+    password: str
+    name: str = ""
 
 
 class SupportPayload(BaseModel):
@@ -60,13 +74,83 @@ async def get_setup(request: Request, db: AsyncSession = Depends(get_db)):
         except SetupError as exc:
             license_state["error"] = {"code": exc.code, "message": exc.message}
     assemblyai_configured = bool(config.assembly_ai_api_key)
+    account = await _account_state(db)
     return {
+        "account": account,
         "license": license_state,
         "assemblyai": {"configured": assemblyai_configured},
         "transcription": "assemblyai" if assemblyai_configured else "whisper",
         "whisper_fallback": config.transcription_fallback == "whisper",
-        "ready": license_state.get("info") is not None,
+        # Signed in (the license comes with the account); a license typed by hand
+        # before accounts existed still works.
+        "ready": bool(account.get("signed_in")) or license_state.get("info") is not None,
     }
+
+
+async def _account_state(db: AsyncSession) -> dict:
+    """The signed-in account, read live from the site (plan and free cuts left)."""
+    token = account_token()
+    if not token:
+        return {"signed_in": False}
+    config = get_config()
+    status, body = await site_request("GET", "/account", site_url=config.kortes_site_url, license_key=token)
+    if status == 200 and isinstance(body, dict):
+        return {"signed_in": True, **body}
+    if status in (401, 403) and isinstance(body, dict):
+        # Signed out on the site (session replaced, account moved or blocked): sign out here too.
+        if body.get("code") in {"signed_out", "other_device", "blocked"}:
+            await save_settings(db, {ACCOUNT_TOKEN_SETTING: None, "OPENAI_API_KEY": None})
+        return {"signed_in": False, "error": body.get("detail")}
+    # Site unreachable: keep working with what is saved.
+    return {"signed_in": True, "offline": True}
+
+
+async def _account_call(path: str, payload: AccountPayload, request: Request, db: AsyncSession):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    status, body = await site_request(
+        "POST", path, site_url=config.kortes_site_url, license_key=None,
+        payload={"email": payload.email, "password": payload.password, "name": payload.name},
+    )
+    if status == 200 and isinstance(body, dict) and body.get("token") and body.get("license"):
+        await save_settings(db, {ACCOUNT_TOKEN_SETTING: body["token"], "OPENAI_API_KEY": body["license"]})
+        logger.info("Desktop signed in to its Kortes account")
+        return {"account": {"signed_in": True, **(body.get("account") or {})}}
+    return _relay(status, body)
+
+
+@router.post("/account/login")
+async def account_login(payload: AccountPayload, request: Request, db: AsyncSession = Depends(get_db)):
+    return await _account_call("/auth/login", payload, request, db)
+
+
+@router.post("/account/signup")
+async def account_signup(payload: AccountPayload, request: Request, db: AsyncSession = Depends(get_db)):
+    return await _account_call("/auth/signup", payload, request, db)
+
+
+@router.post("/account/set-password")
+async def account_set_password(payload: AccountPayload, request: Request, db: AsyncSession = Depends(get_db)):
+    """First access of an account bought on Kirvano: its first password."""
+    return await _account_call("/auth/set-password", payload, request, db)
+
+
+@router.get("/account")
+async def get_account(request: Request, db: AsyncSession = Depends(get_db)):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    return await _account_state(db)
+
+
+@router.post("/account/logout")
+async def account_logout(request: Request, db: AsyncSession = Depends(get_db)):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    token = account_token()
+    if token:
+        await site_request("POST", "/auth/logout", site_url=config.kortes_site_url, license_key=token)
+    await save_settings(db, {ACCOUNT_TOKEN_SETTING: None, "OPENAI_API_KEY": None})
+    return {"account": {"signed_in": False}}
 
 
 @router.post("/license")

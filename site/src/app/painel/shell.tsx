@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db, describeDbError } from "@/lib/db";
 import { logout } from "./actions";
 
-export function Shell({ active, children }: { active: "mensagens" | "avisos"; children: React.ReactNode }) {
+export function Shell({ active, children }: { active: "mensagens" | "avisos" | "clientes" | "pagamentos"; children: React.ReactNode }) {
   return (
     <div className="shell">
       <header className="topbar">
@@ -14,6 +14,8 @@ export function Shell({ active, children }: { active: "mensagens" | "avisos"; ch
         <nav aria-label="Painel">
           <Link href="/painel" aria-current={active === "mensagens" ? "page" : undefined}>Mensagens</Link>
           <Link href="/painel/avisos" aria-current={active === "avisos" ? "page" : undefined}>Avisos</Link>
+          <Link href="/painel/clientes" aria-current={active === "clientes" ? "page" : undefined}>Clientes</Link>
+          <Link href="/painel/pagamentos" aria-current={active === "pagamentos" ? "page" : undefined}>Pagamentos</Link>
         </nav>
         <form action={logout}>
           <button type="submit" className="ghost">Sair</button>

@@ -258,6 +258,7 @@ class QueuedClipRenderMixin:
                 settings.get("cleanup_settings"),
                 webcam_region=settings.get("webcam_region"),
                 hook_intro=settings.get("hook_intro"),
+                title_overlay=settings.get("title_overlay") is not False,
                 clip_source=(
                     ClipSource(video_path, plan["url"], sections=True)
                     if plan.get("sections")

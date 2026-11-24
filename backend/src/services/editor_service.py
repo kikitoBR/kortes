@@ -440,6 +440,14 @@ async def export_editor(ctx, task_id: str, clip_id: str, filename: str, job_id: 
         await run_in_thread(
             render_document, directory, job_id, document, payload["preset"]
         )
+        # Kortes Desktop free plan: the exported file carries the Kortes mark too.
+        async with AsyncSessionLocal() as db:
+            free_plan = (await TaskService(db)._load_task_source_settings(task_id)).get("watermark")
+        if free_plan:
+            from ..media.watermark import apply_watermark
+
+            if not await run_in_thread(apply_watermark, directory / f"export-{job_id}.mp4"):
+                raise RuntimeError("watermark failed")
         await run_in_thread(MediaStorage().persist_editor_export, directory, job_id)
         atomic_json(
             directory / f"job-{job_id}.json", {"status": "completed", "progress": 100}

@@ -308,3 +308,41 @@ def test_separate_video_and_audio_streams_stay_in_sync(tmp_path):
     first = probe_piece(sorted(pieces.glob("r_*.ts"))[0])
     # The voice starts 2 s after the picture, as on the stream (not both at 0).
     assert abs((first["audio_start"] - first["start"]) - 2.0) < 0.1
+
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
+@pytest.mark.asyncio
+async def test_a_free_live_cuts_its_first_moments_as_they_happen_then_stops(config, stream_file):
+    class Hooks(FakeHooks):
+        async def find_moments(self, prompt):
+            self.prompts.append(prompt)
+            now = re.search(r"heard up to (\d+):(\d+)", prompt)
+            heard = int(now.group(1)) * 60 + int(now.group(2))
+            moments = []
+            if heard >= 40 and "00:05" not in prompt.split("ALREADY CLIPPED")[-1].split("TRANSCRIPT")[0]:
+                moments.append(LiveMoment(start_time="00:05", end_time="00:25", hook_title="Bom", score=7, reason="bom"))
+            if heard >= 90:
+                moments.append(LiveMoment(start_time="00:55", end_time="01:20", hook_title="Que susto!", score=9, reason="grito"))
+            return LiveMoments(moments=moments)
+
+    hooks = Hooks(stream_file)
+    hooks.task_id = "task-free-live"
+    options = LiveOptions(output_format="original", add_subtitles=False, max_seconds=3600, max_clips=1, watermark=True)
+    session = LiveSession("task-free-live", options, hooks, realtime=False, poll_seconds=0.1)
+
+    result = await session.run()
+
+    # In order, as they happen: the first strong moment takes the plan's cut,
+    # not the stronger one that comes later.
+    assert result["status"] == "completed" and result["clips"] == 1
+    assert [s["hook_title"] for s in hooks.rendered] == ["Bom"]
+    assert [c["title"] for c in session.state["clips"]] == ["Bom"]
+
+
+def test_a_free_live_says_its_limit_and_stops_once_it_is_spent(config, tmp_path):
+    session = LiveSession("task-free-msg", LiveOptions(max_clips=5, watermark=True), FakeHooks(tmp_path))
+    assert session.max_clips == 5
+    assert "plano grátis: até 5 cortes" in session.message()
+    session.plan_limit_reached = session.ending = True
+    assert session.message().startswith("Seus 5 cortes grátis desta live")

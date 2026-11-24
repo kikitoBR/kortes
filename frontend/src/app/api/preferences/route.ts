@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPrismaClient } from "@/server/prisma";
 import { getServerSession } from "@/server/session";
+import { invalidVideoDefaultKeys, normalizeVideoDefaults } from "@/lib/video-defaults";
 
 // GET /api/preferences - Get user preferences
 export async function GET() {
@@ -22,6 +23,7 @@ export async function GET() {
         default_font_size: true,
         default_font_color: true,
         notify_on_completion: true,
+        video_defaults: true,
       },
     });
 
@@ -37,6 +39,7 @@ export async function GET() {
       fontSize: user.default_font_size || 24,
       fontColor: user.default_font_color || "#FFFFFF",
       notifyOnCompletion: user.notify_on_completion ?? true,
+      videoDefaults: normalizeVideoDefaults(user.video_defaults),
     });
   } catch (error) {
     console.error("Error fetching preferences:", error);
@@ -63,7 +66,18 @@ export async function PATCH(request: NextRequest) {
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return NextResponse.json({ error: "Expected a preferences object" }, { status: 400 });
     }
-    const { fontFamily, fontSize, fontColor, notifyOnCompletion } = body;
+    const { fontFamily, fontSize, fontColor, notifyOnCompletion, videoDefaults } = body;
+
+    // "Padrões para novos vídeos": a partial object merged into what is saved.
+    if (videoDefaults !== undefined) {
+      if (!videoDefaults || typeof videoDefaults !== "object" || Array.isArray(videoDefaults)) {
+        return NextResponse.json({ error: "Invalid videoDefaults" }, { status: 400 });
+      }
+      const invalid = invalidVideoDefaultKeys(videoDefaults);
+      if (invalid.length) {
+        return NextResponse.json({ error: `Valor inválido em: ${invalid.join(", ")}` }, { status: 400 });
+      }
+    }
 
     // Validate inputs
     if (fontFamily !== undefined && (typeof fontFamily !== "string" || !fontFamily.trim())) {
@@ -107,12 +121,21 @@ export async function PATCH(request: NextRequest) {
         ...(notifyOnCompletion !== undefined && {
           notify_on_completion: notifyOnCompletion,
         }),
+        ...(videoDefaults !== undefined && {
+          video_defaults: normalizeVideoDefaults({
+            ...normalizeVideoDefaults(
+              (await prisma.user.findUnique({ where: { id: session.user.id }, select: { video_defaults: true } }))?.video_defaults,
+            ),
+            ...videoDefaults,
+          }),
+        }),
       },
       select: {
         default_font_family: true,
         default_font_size: true,
         default_font_color: true,
         notify_on_completion: true,
+        video_defaults: true,
       },
     });
 
@@ -121,6 +144,7 @@ export async function PATCH(request: NextRequest) {
       fontSize: updatedUser.default_font_size,
       fontColor: updatedUser.default_font_color,
       notifyOnCompletion: updatedUser.notify_on_completion,
+      videoDefaults: normalizeVideoDefaults(updatedUser.video_defaults),
     });
   } catch (error) {
     console.error("Error updating preferences:", error);

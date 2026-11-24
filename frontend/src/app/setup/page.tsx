@@ -9,7 +9,7 @@ import { DesktopSetup } from "@/components/desktop/desktop-setup";
 import { Button } from "@/components/ui/button";
 import { isDesktop } from "@/lib/edition";
 
-/** Kortes Desktop first run: activate the license, connect AssemblyAI (or use Whisper). */
+/** Kortes Desktop first run: sign in (or create the free account), connect AssemblyAI (or use Whisper). */
 export default function SetupPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -28,13 +28,13 @@ export default function SetupPage() {
         </div>
         <h1 className="mt-8 font-display text-3xl font-bold tracking-tight">Vamos deixar tudo pronto</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Dois passos rápidos: ative sua licença e escolha como o Kortes vai transcrever seus vídeos.
+          Dois passos rápidos: entre na sua conta e escolha como o Kortes vai transcrever seus vídeos.
         </p>
         <div className="mt-8">
           <DesktopSetup onReadyChange={setReady} />
         </div>
         <div className="mt-8 flex items-center justify-end gap-3">
-          {!ready ? <p className="text-sm text-muted-foreground">Ative a licença para continuar.</p> : null}
+          {!ready ? <p className="text-sm text-muted-foreground">Entre na sua conta para continuar.</p> : null}
           <Button size="lg" disabled={!ready} onClick={() => router.push("/")}>
             Começar a criar <ArrowRight className="size-4" />
           </Button>

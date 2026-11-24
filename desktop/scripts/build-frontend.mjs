@@ -34,7 +34,9 @@ function run(command, env = {}) {
 }
 
 copySources();
-run("pnpm install --frozen-lockfile --config.node-linker=hoisted --ignore-workspace");
+// The copy brings frontend/pnpm-workspace.yaml (the pinned patched versions), so it is
+// its own workspace root: no --ignore-workspace, or pnpm would drop those versions.
+run("pnpm install --frozen-lockfile --config.node-linker=hoisted");
 run("pnpm exec prisma generate");
 // Next's file tracing (@vercel/nft) follows paths built from the home folder; on the
 // Windows release runner that folder holds protected WindowsApps entries and the

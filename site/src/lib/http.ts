@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { AccountError } from "./accounts";
 import { LicenseError } from "./license";
 
 export function json(data: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -7,6 +8,7 @@ export function json(data: unknown, status = 200, headers: Record<string, string
 
 export function errorResponse(error: unknown) {
   if (error instanceof LicenseError) return json({ detail: error.message }, error.status);
+  if (error instanceof AccountError) return json({ detail: error.message, code: error.code }, error.status);
   console.error(error);
   return json({ detail: "Erro no servidor do Kortes. Tente de novo em instantes." }, 500);
 }

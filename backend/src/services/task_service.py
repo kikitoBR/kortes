@@ -66,6 +66,41 @@ def reusable_clip_ids(
     return kept
 
 
+BEST_MIN_VIRALITY = 70
+BEST_KEEP_AT_LEAST = 3
+
+
+def strongest_segments(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """ "Só os melhores": segments scoring BEST_MIN_VIRALITY+, never fewer than the
+    BEST_KEEP_AT_LEAST highest (a video with no great moment still gives a few)."""
+
+    def score(segment: Dict[str, Any]) -> float:
+        try:
+            return float(segment.get("virality_score") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    floor = sorted((score(s) for s in segments), reverse=True)[: BEST_KEEP_AT_LEAST][-1:] or [0.0]
+    threshold = min(BEST_MIN_VIRALITY, floor[0])
+    return [segment for segment in segments if score(segment) >= threshold]
+
+
+def best_segments(segments: List[Dict[str, Any]], count: int) -> List[Dict[str, Any]]:
+    """The ``count`` highest-scoring segments, best first (Kortes Desktop free plan).
+
+    Ties keep the AI's own order, which already ranks the long-video rerank.
+    """
+
+    def score(segment: Dict[str, Any]) -> float:
+        try:
+            return float(segment.get("virality_score") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    ranked = sorted(enumerate(segments), key=lambda item: (-score(item[1]), item[0]))
+    return [segment for _, segment in ranked[: max(1, count)]]
+
+
 def clip_progress_message(index: int, total: int, failed: int) -> str:
     """Render-stage progress line; says how many clips were skipped so far."""
     message = f"Criando o clipe {index + 1} de {total}..."
@@ -105,10 +140,17 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
         source_type: str,
         processing_mode: str,
         clip_duration: Optional[str] = "auto",
+        clip_count: Optional[int] = None,
+        strictness: Optional[str] = None,
     ) -> str:
         norm_duration = (clip_duration or "auto").strip().lower()
+        # A chosen number of clips (or "Mais cortes") is its own analysis;
+        # automatic and balanced keep the old key.
+        count = f"|n{clip_count}" if clip_count else ""
+        if strictness == "more":
+            count += "|more"
         payload = (
-            f"{source_type}|{processing_mode}|{norm_duration}|"
+            f"{source_type}|{processing_mode}|{norm_duration}{count}|"
             f"{TRANSCRIPT_ANALYSIS_CACHE_VERSION}|{url.strip()}"
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -178,6 +220,16 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
     _add_review_note = staticmethod(add_review_note)
 
     async def _create_clip_row(
+        self, task_id: str, clip_info: Dict[str, Any], index: int
+    ) -> str:
+        clip_id = await self._insert_clip_row(task_id, clip_info, index)
+        # Kortes Desktop: a copy in the folder picked in Configurações.
+        from ..desktop import export_clip
+
+        await export_clip(task_id, clip_info["path"], index + 1, clip_info.get("hook_title"))
+        return clip_id
+
+    async def _insert_clip_row(
         self, task_id: str, clip_info: Dict[str, Any], index: int
     ) -> str:
         return await self.clip_repo.create_clip(
@@ -428,8 +480,14 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
             logger.info(f"Starting processing for task {task_id}")
             started_at = datetime.utcnow()
             stage_timings: Dict[str, float] = {}
+            # How many clips the user asked for (Configurações; None = automatic).
+            source_settings = await self._load_task_source_settings(task_id)
+            clip_count = source_settings.get("clip_count")
+            strictness = source_settings.get("strictness") or "balanced"
+            title_overlay = source_settings.get("title_overlay", True)
             cache_key = self._build_cache_key(
-                url, source_type, processing_mode, clip_duration=clip_duration
+                url, source_type, processing_mode,
+                clip_duration=clip_duration, clip_count=clip_count, strictness=strictness,
             )
 
             cache_entry = await self.cache_repo.get_cache(self.db, cache_key)
@@ -500,6 +558,8 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
                 output_format=output_format,
                 add_subtitles=add_subtitles,
                 clip_duration=clip_duration,
+                clip_count=clip_count,
+                strictness=strictness,
                 max_video_duration=max_video_duration,
                 cached_transcript=cached_transcript,
                 cached_analysis_json=cached_analysis_json,
@@ -541,6 +601,15 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
                 transcript_text=result.get("transcript"),
                 analysis_json=None if performance_context else result.get("analysis_json"),
             )
+
+            # Kortes Desktop free plan: the video's best cuts only (highest virality
+            # first), with the watermark.
+            # "Só os melhores": drop the weaker moments (always keep a few).
+            if strictness == "best":
+                segments_to_render = strongest_segments(segments_to_render)
+            free_plan = bool(source_settings.get("watermark"))
+            if free_plan:
+                segments_to_render = best_segments(segments_to_render, source_settings.get("free_clips") or 5)
 
             video_path = Path(result["video_path"])
             # Long YouTube video analysed from its audio: every clip downloads
@@ -599,6 +668,7 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
                         "cleanup_settings": normalized_cleanup_settings,
                         "webcam_region": webcam_region,
                         "hook_intro": hook_intro,
+                        "title_overlay": title_overlay,
                     },
                     stage_timings=stage_timings,
                     show=show_reporter,
@@ -688,6 +758,8 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
                     hook_intro=hook_intro,
                     clip_source=clip_source,
                     show=show,
+                    watermark=free_plan,
+                    title_overlay=title_overlay,
                 )
                 pending_clip_path = Path(clip_info["path"]) if clip_info else None
                 await check_cancelled()

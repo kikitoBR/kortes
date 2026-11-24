@@ -6,6 +6,11 @@
  */
 export const isDesktop = process.env.NEXT_PUBLIC_KORTES_EDITION === "desktop";
 
+/** The Kortes site: plans, password reset, support. */
+export const KORTES_SITE_URL = (process.env.NEXT_PUBLIC_KORTES_SITE_URL || "https://kortes.com.br").replace(/\/$/, "");
+export const PLANS_URL = `${KORTES_SITE_URL}/planos`;
+export const FORGOT_PASSWORD_URL = `${KORTES_SITE_URL}/esqueci-senha`;
+
 export const LOCAL_USER = {
   id: "00000000-0000-4000-8000-000000000001",
   name: "Você",

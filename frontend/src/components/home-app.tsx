@@ -36,6 +36,8 @@ import { FontSelectOption, type FontOption } from "@/components/font-select-opti
 import { WebcamRegionPicker, type WebcamRegion } from "@/components/webcam-region-picker";
 import { isLiveLink } from "@/lib/live-links";
 import { isDesktop } from "@/lib/edition";
+import { FreePlanBanner, useDesktopAccount } from "@/components/desktop/desktop-account";
+import { DURATIONS, FRAMINGS, normalizeVideoDefaults, type ClipDuration, type OutputFormat } from "@/lib/video-defaults";
 
 interface CaptionTemplate {
   id: string;
@@ -47,38 +49,8 @@ interface CaptionTemplate {
   font_color?: string;
 }
 
-type OutputFormat =
-  | "vertical"
-  | "vertical_pan"
-  | "vertical_split"
-  | "vertical_gameplay"
-  | "vertical_gameplay_bottom"
-  | "vertical_cam_float"
-  | "vertical_blur"
-  | "original";
-
-const FRAMINGS: { id: OutputFormat; label: string; hint: string }[] = [
-  { id: "vertical", label: "Auto 9:16", hint: "Corte vertical com rastreamento facial" },
-  { id: "vertical_pan", label: "Seguir orador", hint: "Acompanha quem estiver falando" },
-  { id: "vertical_split", label: "Tela dividida", hint: "Dois oradores empilhados" },
-  { id: "vertical_gameplay", label: "Webcam em cima", hint: "Webcam em cima, jogo embaixo" },
-  { id: "vertical_gameplay_bottom", label: "Jogo em cima", hint: "Jogo em cima, webcam embaixo" },
-  { id: "vertical_cam_float", label: "Webcam flutuando", hint: "Jogo na tela toda, webcam no canto" },
-  { id: "vertical_blur", label: "Fundo borrado", hint: "Vídeo inteiro no meio, fundo borrado" },
-  { id: "original", label: "Original", hint: "Manter proporção original do vídeo" },
-];
-
 /** Layouts built around the streamer's webcam (it can be marked by hand). */
 const WEBCAM_LAYOUTS: OutputFormat[] = ["vertical_gameplay", "vertical_gameplay_bottom", "vertical_cam_float"];
-
-type ClipDuration = "auto" | "short" | "medium" | "long";
-
-const DURATIONS: { id: ClipDuration; label: string; range: string; hint: string }[] = [
-  { id: "auto", label: "Auto", range: "20s – 2m", hint: "A IA escolhe o tempo ideal para cada momento (20s a 2m)" },
-  { id: "short", label: "Curto", range: "20s – 30s", hint: "Ideal para TikTok e Shorts rápidos" },
-  { id: "medium", label: "Médio", range: "30s – 60s", hint: "Equilíbrio entre contexto e dinamismo" },
-  { id: "long", label: "Longo", range: "60s – 120s", hint: "Momentos mais completos e reflexivos (1m – 2m)" },
-];
 
 const COLOR_SWATCHES = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 
@@ -90,6 +62,26 @@ function formatBytes(bytes: number) {
 export default function HomeApp() {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const { account: desktopAccount, refresh: refreshDesktopAccount } = useDesktopAccount(isDesktop);
+  const [freePlanMessage, setFreePlanMessage] = useState<string | null>(null);
+
+  // Configurações → "Padrões para novos vídeos": the form starts from them.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/preferences", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const defaults = normalizeVideoDefaults(data.videoDefaults);
+        setOutputFormat(defaults.outputFormat);
+        setClipDuration(defaults.clipDuration);
+        setHookIntro(defaults.hookIntro);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [statusMessage, setStatusMessage] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -336,6 +328,14 @@ export default function HomeApp() {
 
       if (!startResponse.ok) {
         const info = await parseApiError(startResponse, `API error: ${startResponse.status}`);
+        if (isDesktop && startResponse.status === 402) {
+          // Free plan: no free cut left, or this video was already cut.
+          setFreePlanMessage(info.message || "Seus cortes grátis acabaram.");
+          void refreshDesktopAccount();
+          setIsLoading(false);
+          setStatusMessage("");
+          return;
+        }
         const upgradeForError = upgradeReasonForError(info.code, info.detail, upgradeState?.nextPlan?.youtubeMaxMinutes);
         if (upgradeForError) {
           openUpgrade(upgradeForError);
@@ -394,8 +394,8 @@ export default function HomeApp() {
 
         <div className="mx-auto max-w-3xl animate-rise">
           <h1 className="text-center font-display text-3xl font-bold tracking-tight sm:text-[2.6rem] sm:leading-tight">
-            {/* Kortes Desktop has no account name (the local user is "Você"): greet without one. */}
-            {isDesktop ? `${greeting(null)}! O que vamos cortar hoje?` : greeting(session.user.name)}
+            {/* Kortes Desktop: the local user is "Você", so greet with the Kortes account's name (if any). */}
+            {isDesktop ? `${greeting(desktopAccount?.name)}! O que vamos cortar hoje?` : greeting(session.user.name)}
           </h1>
           <p className="mt-2 text-center text-muted-foreground">
             {isDesktop
@@ -404,6 +404,8 @@ export default function HomeApp() {
           </p>
 
           {upgradeState && <PlanStatusNudge state={upgradeState} onUpgrade={openUpgrade} />}
+
+          {isDesktop ? <FreePlanBanner account={desktopAccount} message={freePlanMessage} /> : null}
 
           <VideoDownloadStatus />
 

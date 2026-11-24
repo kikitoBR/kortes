@@ -8,6 +8,7 @@ import {
   Monitor,
   X,
 } from "lucide-react";
+import { isDesktop } from "@/lib/edition";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -250,7 +251,9 @@ export function ExportPanel({
       detail: browserSupport?.label || "Verificando suporte do navegador…",
       disabled: busy || !browserSupport?.supported,
     },
-  ];
+    // Kortes Desktop: the background export already runs on this computer (and adds
+    // the free plan's watermark), so the in-browser one is left out.
+  ].filter((option) => !(isDesktop && option.id === "browser"));
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="max-h-[90vh] gap-5 overflow-y-auto sm:max-w-lg">

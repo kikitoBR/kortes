@@ -78,6 +78,65 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- Accounts (Kortes Desktop sign-in). One computer per account; the free cuts are
+-- counted per computer, so a second free account on the same PC gets nothing new.
+CREATE TABLE IF NOT EXISTS accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL UNIQUE,
+  password_hash text,
+  name text NOT NULL DEFAULT '',
+  plan text NOT NULL DEFAULT 'free',
+  plan_until timestamptz,
+  status text NOT NULL DEFAULT 'active',
+  device text NOT NULL DEFAULT '',
+  device_bound_at timestamptz,
+  license_id text NOT NULL DEFAULT '',
+  license_hash text NOT NULL DEFAULT '',
+  source text NOT NULL DEFAULT 'app',
+  notes text NOT NULL DEFAULT '',
+  last_login_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS account_sessions (
+  token_hash text PRIMARY KEY,
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  device text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS account_sessions_account ON account_sessions (account_id);
+CREATE TABLE IF NOT EXISTS free_devices (
+  device text PRIMARY KEY,
+  extra_clips integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS free_clips (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  device text NOT NULL,
+  account_id uuid REFERENCES accounts(id) ON DELETE SET NULL,
+  source_key text NOT NULL,
+  clips integer NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (device, source_key)
+);
+ALTER TABLE free_clips ADD COLUMN IF NOT EXISTS clips integer NOT NULL DEFAULT 1;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS license_hash text NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash text PRIMARY KEY,
+  account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS payment_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider text NOT NULL,
+  event text NOT NULL DEFAULT '',
+  email text NOT NULL DEFAULT '',
+  result text NOT NULL DEFAULT '',
+  payload jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 `;
 
 /** The database, with its tables created on first use (no migration step to run). */

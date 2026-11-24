@@ -25,6 +25,8 @@ RUNTIME_SETTING_KEYS: tuple[str, ...] = (
     "YOUTUBE_DATA_API_KEY",
     "APIFY_API_TOKEN",
     "PEXELS_API_KEY",
+    # Kortes Desktop: the signed-in account's session on kortes.com.br.
+    "KORTES_ACCOUNT_TOKEN",
 )
 
 PROCESS_ENV_SETTING_KEYS = frozenset(

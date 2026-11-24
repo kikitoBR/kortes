@@ -53,7 +53,7 @@ h1, h2, h3 { line-height: 1.2; margin: 0; }
 .pagehead { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .pagehead h1 { font-size: 24px; letter-spacing: -0.01em; }
 label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
-input[type="text"], input[type="password"], input[type="url"], input[type="datetime-local"], textarea, select {
+input[type="text"], input[type="password"], input[type="url"], input[type="datetime-local"], input[type="email"], input[type="date"], input[type="number"], input:not([type]), textarea, select {
   width: 100%; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px;
 }
 textarea { resize: vertical; min-height: 96px; }
@@ -95,3 +95,11 @@ details.edit summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   .layout2 { grid-template-columns: 1fr; }
   .msg { max-width: 92%; }
 }
+
+/* Panel tables (Clientes, Pagamentos) */
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th, .table td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.table tr:last-child td { border-bottom: none; }
+.table a { font-weight: 600; text-decoration: none; }
+code { font-family: ui-monospace, monospace; font-size: 12px; background: var(--brand-soft); padding: 2px 6px; border-radius: 6px; word-break: break-all; }

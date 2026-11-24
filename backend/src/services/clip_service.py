@@ -23,6 +23,7 @@ from ..video_utils import VALID_OUTPUT_FORMATS, parse_timestamp_to_seconds, crea
 from ..utils.async_helpers import run_in_thread
 from ..clip_cleanup import normalize_clip_cleanup_settings
 from ..media.common import normalize_webcam_region
+from ..ai import normalize_clip_count
 from ..clip_source_map import (
     load_clip_source_ranges,
     save_clip_source_ranges,
@@ -165,6 +166,8 @@ class ClipEditingMixin:
                     webcam_region=metadata.get("webcam_region"),
                     hook_intro=metadata.get("hook_intro"),
                     clip_source=clip_source,
+                    watermark=bool(metadata.get("watermark")),
+                    title_overlay=metadata.get("title_overlay") is not False,
                 )
                 if not info:
                     failed += 1
@@ -175,6 +178,11 @@ class ClipEditingMixin:
                         self.db, clip["id"], info["filename"], info["path"], info["start_time"],
                         info["end_time"], info["duration"], info.get("text") or clip.get("text") or "",
                     )
+                from ..desktop import export_clip
+
+                await export_clip(
+                    task_id, info["path"], int(clip.get("clip_order") or index + 1), clip.get("hook_title")
+                )
                 done += 1
         finally:
             await run_in_thread(clip_source.close)
@@ -535,6 +543,8 @@ class ClipEditingMixin:
                 webcam_region=settings.get("webcam_region"),
                 hook_intro=settings.get("hook_intro"),
                 clip_source=clip_source,
+                watermark=bool(settings.get("watermark")),
+                title_overlay=settings.get("title_overlay") is not False,
             )
         finally:
             await run_in_thread(clip_source.close)
@@ -553,6 +563,11 @@ class ClipEditingMixin:
         )
         if adjusted.get("hook_title") != clip.get("hook_title"):
             await self.clip_repo.update_clip_hook_title(self.db, clip_id, adjusted.get("hook_title"))
+        from ..desktop import export_clip
+
+        await export_clip(
+            task_id, info["path"], int(clip.get("clip_order") or 1), adjusted.get("hook_title") or clip.get("hook_title")
+        )
         return {
             "clip": (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {},
             "reply": " ".join(
@@ -665,6 +680,12 @@ class ClipEditingMixin:
             "add_subtitles": add_subtitles,
             "webcam_region": normalize_webcam_region(parsed.get("webcam_region")),
             "hook_intro": parsed.get("hook_intro") if isinstance(parsed.get("hook_intro"), bool) else None,
+            # Kortes Desktop free plan: every render of this task carries the Kortes mark.
+            "watermark": parsed.get("watermark") is True,
+            "free_clips": parsed.get("free_clips") if isinstance(parsed.get("free_clips"), int) else None,
+            "clip_count": normalize_clip_count(parsed.get("clip_count")),
+            "strictness": parsed.get("strictness") if parsed.get("strictness") in {"more", "balanced", "best"} else "balanced",
+            "title_overlay": parsed.get("title_overlay") is not False,
             **normalize_clip_cleanup_settings(
                 parsed.get("cut_long_pauses"),
                 parsed.get("pause_threshold_ms"),

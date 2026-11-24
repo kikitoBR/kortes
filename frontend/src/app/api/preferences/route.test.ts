@@ -35,6 +35,7 @@ describe("/api/preferences", () => {
           default_font_size: 28,
           default_font_color: "#123456",
           notify_on_completion: false,
+          video_defaults: { clipCount: 15, strictness: "best", outputFormat: "nope" },
         }),
       },
     } as never);
@@ -47,6 +48,16 @@ describe("/api/preferences", () => {
       fontSize: 28,
       fontColor: "#123456",
       notifyOnCompletion: false,
+      videoDefaults: {
+        clipCount: 15,
+        strictness: "best",
+        clipDuration: "auto",
+        outputFormat: "vertical",
+        titleOverlay: true,
+        hookIntro: false,
+        exportDir: null,
+        notifyDesktop: true,
+      },
     });
   });
 
@@ -97,9 +108,10 @@ describe("/api/preferences", () => {
       default_font_size: 24,
       default_font_color: "#FFFFFF",
       notify_on_completion: true,
+      video_defaults: { clipCount: 20, titleOverlay: false },
     });
     vi.mocked(getPrismaClient).mockReturnValue({
-      user: { update },
+      user: { update, findUnique: vi.fn().mockResolvedValue({ video_defaults: { strictness: "balanced" } }) },
     } as never);
 
     const response = await PATCH(
@@ -111,6 +123,7 @@ describe("/api/preferences", () => {
           fontSize: 24,
           fontColor: "#FFFFFF",
           notifyOnCompletion: true,
+          videoDefaults: { clipCount: 20, titleOverlay: false },
         }),
       }) as never,
     );
@@ -122,7 +135,19 @@ describe("/api/preferences", () => {
       fontSize: 24,
       fontColor: "#FFFFFF",
       notifyOnCompletion: true,
+      videoDefaults: expect.objectContaining({ clipCount: 20, titleOverlay: false, strictness: "balanced" }),
     });
+    expect(update.mock.calls[0][0].data.video_defaults).toEqual(
+      expect.objectContaining({ clipCount: 20, titleOverlay: false, outputFormat: "vertical" }),
+    );
+  });
+
+  it.each([{ clipCount: 12 }, { clipCount: "10" }, { strictness: "max" }, { outputFormat: "square" }, { titleOverlay: "no" }])("rejects an invalid video default: %j", async (videoDefaults) => {
+    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    const response = await PATCH(new Request("http://localhost/api/preferences", {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ videoDefaults }),
+    }) as never);
+    expect(response.status).toBe(400);
   });
   it.each([{ fontSize: 0 }, { fontSize: null }, { fontSize: 24.5 }, { fontFamily: false }, { fontColor: "" }, null, []])("rejects invalid falsy or non-object preferences: %j", async (body) => {
     vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);

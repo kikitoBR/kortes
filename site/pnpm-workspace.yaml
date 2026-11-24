@@ -1,0 +1,4 @@
+# Patched versions of packages Next.js and the auth library pull in (security).
+overrides:
+  postcss: 8.5.32
+  sharp: 0.35.5

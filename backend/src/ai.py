@@ -855,6 +855,7 @@ def build_transcript_analysis_prompt(
     performance_context: str | None = None,
     clip_duration: Optional[str] = "auto",
     voice_energy: Optional[Sequence[float]] = None,
+    segment_target: Optional[str] = None,
 ) -> str:
     """Build the grounded task prompt for transcript analysis.
 
@@ -862,7 +863,7 @@ def build_transcript_analysis_prompt(
     ``performance_context`` is the creator's measured audience history, if any.
     ``clip_duration`` is the user's preferred clip length: short (20-30s), medium (30-60s), long (1-2m), auto (20-60s).
     """
-    segment_target = ANALYSIS_WINDOW_SEGMENT_TARGET if window else "2-5"
+    segment_target = segment_target or (ANALYSIS_WINDOW_SEGMENT_TARGET if window else "2-5")
     window_note = ""
     if window:
         window_note = (
@@ -1391,15 +1392,44 @@ def dedupe_overlapping_segments(
     return [segment for segment, _ in kept]
 
 
+CLIP_COUNT_CHOICES = (5, 10, 15, 20)
+
+
+def normalize_clip_count(value: Any) -> Optional[int]:
+    """The user's "Cortes por vídeo": one of CLIP_COUNT_CHOICES, else None (automatic)."""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count in CLIP_COUNT_CHOICES else None
+
+
+MORE_CLIPS_SECONDS_PER_CLIP = 3 * 60  # "Mais cortes": about one clip per 3 minutes
+
+
+def clip_count_targets(
+    clip_count: Optional[int], windows: int, strictness: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """What to ask the AI for when the user picked a number of clips (or "Mais cortes"):
+    (single-transcript target, per-window target); (None, None) keeps the defaults."""
+    if not clip_count:
+        return ("4-8", "4-6") if strictness == "more" else (None, None)
+    single = f"{max(2, clip_count - 2)}-{clip_count}" if clip_count > 5 else None
+    # Windows overlap and duplicates are dropped: ask each for a share plus some room.
+    per_window = math.ceil(clip_count * 1.4 / max(1, windows))
+    window = f"{max(3, per_window - 2)}-{max(5, per_window)}" if per_window > 5 else None
+    return single, window
+
+
 def max_final_clips_for_duration(
-    source_seconds: float, max_clips: int = MAX_FINAL_CLIPS
+    source_seconds: float, max_clips: int = MAX_FINAL_CLIPS, seconds_per_clip: int = SECONDS_PER_FINAL_CLIP
 ) -> int:
     """Scale the clip budget with source length (about one clip per 5 minutes),
     never above ``max_clips`` (the configured MAX_CLIPS)."""
     ceiling = max(1, min(MAX_FINAL_CLIPS, max_clips))
     return max(
         min(MIN_FINAL_CLIPS, ceiling),
-        min(ceiling, math.ceil(max(0.0, source_seconds) / SECONDS_PER_FINAL_CLIP)),
+        min(ceiling, math.ceil(max(0.0, source_seconds) / seconds_per_clip)),
     )
 
 
@@ -1514,6 +1544,7 @@ async def _analyze_transcript_windows(
     performance_context: Optional[str] = None,
     clip_duration: Optional[str] = "auto",
     voice_energy: Optional[Sequence[float]] = None,
+    segment_target: Optional[str] = None,
 ) -> List[TranscriptAnalysis]:
     """Analyse windows with bounded concurrency, tolerating some failures.
 
@@ -1533,6 +1564,7 @@ async def _analyze_transcript_windows(
                 performance_context=performance_context,
                 clip_duration=clip_duration,
                 voice_energy=voice_energy,
+                segment_target=segment_target,
             )
             result = await _run_transcript_analysis(agent, prompt)
             return result.output
@@ -1753,8 +1785,14 @@ async def get_most_relevant_parts_by_transcript(
     performance_context: str | None = None,
     clip_duration: Optional[str] = "auto",
     voice_energy: Optional[Sequence[float]] = None,
+    clip_count: Optional[int] = None,
+    strictness: Optional[str] = None,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection.
+
+    ``clip_count`` is the user's choice of how many clips (None: automatic, about
+    one per 5 minutes up to MAX_CLIPS). ``strictness`` "more" makes automatic about
+    one per 3 minutes.
 
     ``voice_energy`` (per-second z-scores) marks the lines where the voice peaks.
 
@@ -1771,6 +1809,7 @@ async def get_most_relevant_parts_by_transcript(
         transcript_lines = _parse_transcript_lines(transcript)
         transcript_spans = _parse_transcript_spans(transcript)
         windows = split_transcript_into_windows(transcript)
+        single_target, window_target = clip_count_targets(clip_count, len(windows), strictness)
 
         if len(windows) == 1:
             result = await _run_transcript_analysis(
@@ -1782,6 +1821,7 @@ async def get_most_relevant_parts_by_transcript(
                     performance_context=performance_context,
                     clip_duration=clip_duration,
                     voice_energy=voice_energy,
+                    segment_target=single_target,
                 )
             )
             analyses = [result.output]
@@ -1790,6 +1830,7 @@ async def get_most_relevant_parts_by_transcript(
             analyses = await _analyze_transcript_windows(
                 agent, windows, include_broll, clip_signals, performance_context,
                 clip_duration=clip_duration, voice_energy=voice_energy,
+                segment_target=window_target,
             )
 
         candidates: List[TranscriptSegment] = []
@@ -1812,9 +1853,16 @@ async def get_most_relevant_parts_by_transcript(
         source_seconds = max(
             (line["end_seconds"] for line in transcript_lines), default=0
         )
-        validated_segments = candidates[
-            : max_final_clips_for_duration(source_seconds, get_config().max_clips)
-        ]
+        final_count = (
+            min(clip_count, MAX_FINAL_CLIPS)
+            if clip_count
+            else max_final_clips_for_duration(
+                source_seconds,
+                get_config().max_clips,
+                MORE_CLIPS_SECONDS_PER_CLIP if strictness == "more" else SECONDS_PER_FINAL_CLIP,
+            )
+        )
+        validated_segments = candidates[:final_count]
 
         broll_opportunities = None
         if include_broll:

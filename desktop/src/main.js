@@ -1,7 +1,7 @@
 // Kortes Desktop: a window around the local Kortes. Starts the services, shows
 // the app, checks for updates, and shuts everything down on exit.
 
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -128,7 +128,13 @@ async function start() {
     backgroundColor: "#faf8f5",
     autoHideMenuBar: true,
     // Keep timers and progress updates at full speed when the window is behind others.
-    webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false },
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      backgroundThrottling: false,
+      // window.kortesDesktop: pick and open the cuts' folder (src/preload.js).
+      preload: path.join(__dirname, "preload.js"),
+    },
   });
   // If the page ever hangs or dies, say so in kortes.log; a dead page reloads itself.
   mainWindow.webContents.on("unresponsive", () => log("a página parou de responder"));
@@ -208,3 +214,25 @@ if (!app.requestSingleInstanceLock()) {
     services.stop().finally(() => app.quit());
   });
 }
+
+// Configurações → "Pasta dos cortes": the page asks, Windows answers.
+ipcMain.handle("kortes:pick-folder", async (event, current) => {
+  const owner = BrowserWindow.fromWebContents(event.sender) || undefined;
+  const result = await dialog.showOpenDialog(owner, {
+    title: "Pasta onde salvar os cortes",
+    defaultPath: current || app.getPath("videos"),
+    properties: ["openDirectory", "createDirectory"],
+  });
+  return result.canceled || !result.filePaths.length ? null : result.filePaths[0];
+});
+
+ipcMain.handle("kortes:open-folder", async (_event, folder) => {
+  if (!folder || !path.isAbsolute(folder)) return "Pasta inválida.";
+  try {
+    if (!fs.statSync(folder).isDirectory()) return "Não é uma pasta.";
+  } catch {
+    return "A pasta não existe mais.";
+  }
+  // shell.openPath answers "" when it opened, or the reason it did not.
+  return shell.openPath(folder);
+});

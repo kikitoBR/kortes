@@ -6,6 +6,7 @@ import { AlertCircle, Check, ExternalLink, KeyRound, Loader2, Mic } from "lucide
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { AccountCard, type DesktopAccount } from "./desktop-account";
 
 export type LicenseInfo = {
   name: string;
@@ -16,6 +17,7 @@ export type LicenseInfo = {
 };
 
 export type DesktopSetupState = {
+  account: DesktopAccount;
   license: { configured: boolean; info?: LicenseInfo; error?: { code: string; message: string } };
   assemblyai: { configured: boolean };
   transcription: "assemblyai" | "whisper";
@@ -28,7 +30,7 @@ const ASSEMBLYAI_KEYS_URL = "https://www.assemblyai.com/app/api-keys";
 
 let readyCache: boolean | null = null;
 
-/** Whether the license is active (cached for the page's lifetime; the setup page refreshes it). */
+/** Whether the account is signed in (or an old license is active) (cached for the page's lifetime; the setup page refreshes it). */
 export async function isDesktopReady(): Promise<boolean> {
   if (readyCache !== null) return readyCache;
   try {
@@ -66,7 +68,7 @@ function formatDate(value: string | null) {
   return `Vence em ${date.toLocaleDateString("pt-BR")}`;
 }
 
-/** The license and AssemblyAI cards, used by the first-run page and by Configurações. */
+/** The account, (old) license and AssemblyAI cards, used by the first-run page and by Configurações. */
 export function DesktopSetup({ onReadyChange }: { onReadyChange?: (ready: boolean) => void }) {
   const [state, setState] = useState<DesktopSetupState | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -106,7 +108,9 @@ export function DesktopSetup({ onReadyChange }: { onReadyChange?: (ready: boolea
 
   return (
     <div className="space-y-6">
-      <LicenseCard state={state} onChange={reload} />
+      <AccountCard account={state.account ?? { signed_in: false }} onChange={reload} />
+      {/* Customers from before accounts keep their kl_ key; new ones never see this card. */}
+      {!state.account?.signed_in && state.license.configured ? <LicenseCard state={state} onChange={reload} /> : null}
       <TranscriptionCard state={state} onChange={reload} />
     </div>
   );

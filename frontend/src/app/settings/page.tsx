@@ -21,6 +21,9 @@ import { toast } from "sonner";
 import { track } from "@/lib/datafast";
 import Link from "next/link";
 import { AlertCircle, Bot, Check, ChevronRight, CreditCard, Loader2, Mail, Megaphone, Share2, Type } from "lucide-react";
+import { DesktopCutsSection, VideoDefaultsSection } from "@/components/settings/video-defaults-section";
+import { forgetNotifySetting } from "@/lib/desktop-notify";
+import { normalizeVideoDefaults, VIDEO_DEFAULTS, type VideoDefaults } from "@/lib/video-defaults";
 import { cn } from "@/lib/utils";
 import { isDesktop } from "@/lib/edition";
 import { DesktopSetup } from "@/components/desktop/desktop-setup";
@@ -31,6 +34,7 @@ interface UserPreferences {
   fontSize: number;
   fontColor: string;
   notifyOnCompletion: boolean;
+  videoDefaults?: VideoDefaults;
 }
 
 interface BillingSummary {
@@ -51,6 +55,7 @@ export default function SettingsPage() {
   const [fontSize, setFontSize] = useState(24);
   const [fontColor, setFontColor] = useState("#FFFFFF");
   const [completionEmails, setCompletionEmails] = useState(true);
+  const [videoDefaults, setVideoDefaults] = useState<VideoDefaults>(VIDEO_DEFAULTS);
   const [availableFonts, setAvailableFonts] = useState<FontOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
@@ -146,7 +151,9 @@ export default function SettingsPage() {
           setFontSize(data.fontSize);
           setFontColor(data.fontColor);
           setCompletionEmails(data.notifyOnCompletion ?? true);
-          setSavedSnapshot(JSON.stringify([data.fontFamily, data.fontSize, data.fontColor, data.notifyOnCompletion ?? true]));
+          const defaults = normalizeVideoDefaults(data.videoDefaults);
+          setVideoDefaults(defaults);
+          setSavedSnapshot(JSON.stringify([data.fontFamily, data.fontSize, data.fontColor, data.notifyOnCompletion ?? true, defaults]));
         }
       } catch (error) {
         console.error('Failed to load preferences:', error);
@@ -241,6 +248,7 @@ export default function SettingsPage() {
           fontSize,
           fontColor,
           notifyOnCompletion: completionEmails,
+          videoDefaults,
         }),
       });
 
@@ -250,7 +258,8 @@ export default function SettingsPage() {
       }
 
       track("preferences_saved");
-      setSavedSnapshot(JSON.stringify([fontFamily, fontSize, fontColor, completionEmails]));
+      setSavedSnapshot(JSON.stringify([fontFamily, fontSize, fontColor, completionEmails, videoDefaults]));
+      forgetNotifySetting();
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (error) {
@@ -279,7 +288,7 @@ export default function SettingsPage() {
     );
   }
 
-  const dirty = savedSnapshot !== null && savedSnapshot !== JSON.stringify([fontFamily, fontSize, fontColor, completionEmails]);
+  const dirty = savedSnapshot !== null && savedSnapshot !== JSON.stringify([fontFamily, fontSize, fontColor, completionEmails, videoDefaults]);
   // The save bar only appears once there's something to save (and briefly to confirm it).
   const showSaveBar = dirty || isLoading || success;
   const usagePct = billingSummary?.usage_limit ? Math.min(100, (billingSummary.usage_count / billingSummary.usage_limit) * 100) : 0;
@@ -287,10 +296,14 @@ export default function SettingsPage() {
   return (
     <main className={cn("mx-auto w-full max-w-3xl px-4 pt-8 sm:px-8 md:pt-10", showSaveBar ? "pb-32" : "pb-16")}>
       <h1 className="font-display text-3xl font-bold tracking-tight">Configurações</h1>
-      <p className="mt-1 text-sm text-muted-foreground">{isDesktop ? "Licença, transcrição e padrões para novos vídeos." : "Padrões para novos vídeos gerados, notificações e seu plano."}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{isDesktop ? "Conta, transcrição e padrões para novos vídeos." : "Padrões para novos vídeos gerados, notificações e seu plano."}</p>
 
       <div className="mt-8 space-y-6">
         {isDesktop ? <DesktopSetup /> : null}
+
+        <VideoDefaultsSection value={videoDefaults} onChange={setVideoDefaults} disabled={isLoading} />
+
+        {isDesktop ? <DesktopCutsSection value={videoDefaults} onChange={setVideoDefaults} disabled={isLoading} /> : null}
 
         <Section icon={<Type className="size-4" />} title="Padrões de legenda" description="Aplicados a cada novo vídeo criado. Você ainda pode ajustá-los por clipe.">
           <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_150px]">

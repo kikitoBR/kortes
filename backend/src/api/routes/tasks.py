@@ -31,6 +31,7 @@ from ...database import AsyncSessionLocal
 from ...services.task_service import TaskService
 from ...services.billing_service import BillingService, BillingLimitExceeded
 from ...auth_headers import resolve_authenticated_user_id
+from ...ai import normalize_clip_count
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import get_config
@@ -278,6 +279,30 @@ async def _enqueue_live_job(
     )
 
 
+STRICTNESS_LEVELS = {"more", "balanced", "best"}
+# Balanced keeps LIVE_MIN_SCORE (6).
+LIVE_MIN_SCORES = {"more": 5, "best": 8}
+
+
+async def _video_defaults(db: AsyncSession, user_id: str) -> Dict[str, Any]:
+    """Configurações → "Padrões para novos vídeos" (users.video_defaults, camelCase keys)."""
+    try:
+        async with db.begin_nested():
+            result = await db.execute(
+                text("SELECT video_defaults FROM users WHERE id = :user_id"), {"user_id": user_id}
+            )
+            value = result.scalar()
+    except Exception:
+        logger.warning("Could not read the video defaults of user %s", user_id, exc_info=True)
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            value = None
+    return value if isinstance(value, dict) else {}
+
+
 def _merge_task_source_metadata(
     existing: Dict[str, Any] | None,
     *,
@@ -289,6 +314,9 @@ def _merge_task_source_metadata(
     clip_duration: Any = None,
     webcam_region: Dict[str, float] | None = None,
     hook_intro: Any = None,
+    clip_count: Any = None,
+    strictness: Any = None,
+    title_overlay: Any = None,
 ) -> Dict[str, Any]:
     merged = dict(existing or {})
 
@@ -308,6 +336,12 @@ def _merge_task_source_metadata(
         merged["webcam_region"] = webcam_region
     if isinstance(hook_intro, bool):
         merged["hook_intro"] = hook_intro
+    if normalize_clip_count(clip_count):
+        merged["clip_count"] = normalize_clip_count(clip_count)
+    if strictness in STRICTNESS_LEVELS:
+        merged["strictness"] = strictness
+    if title_overlay is False:
+        merged["title_overlay"] = False
 
     return merged
 
@@ -439,6 +473,18 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_color = _normalize_font_color(font_options.get("font_color"))
     caption_template = data.get("caption_template", "default")
     include_broll = data.get("include_broll", False)
+    # What the request leaves out comes from the user's saved defaults (API, MCP).
+    defaults = await _video_defaults(db, user_id)
+    for key, saved in (
+        ("output_format", "outputFormat"),
+        ("clip_duration", "clipDuration"),
+        ("hook_intro", "hookIntro"),
+        ("clip_count", "clipCount"),
+        ("strictness", "strictness"),
+        ("title_overlay", "titleOverlay"),
+    ):
+        if key not in data and saved in defaults:
+            data[key] = defaults[saved]
     runtime_config = get_config()
     processing_mode = data.get(
         "processing_mode", runtime_config.default_processing_mode
@@ -464,6 +510,12 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     hook_intro = data.get("hook_intro")
     if not isinstance(hook_intro, bool):
         hook_intro = None
+    # "Cortes por vídeo": 5/10/15/20, anything else is automatic.
+    clip_count = normalize_clip_count(data.get("clip_count"))
+    # "Exigência da IA": more cuts, balanced (as before) or only the best.
+    strictness = data.get("strictness") if data.get("strictness") in STRICTNESS_LEVELS else "balanced"
+    # The AI's hook title at the top of the first seconds.
+    title_overlay = data.get("title_overlay") is not False
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="O link de origem é obrigatório")
 
@@ -506,6 +558,22 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             else:
                 source_title = source_title or metadata.get("title") or "YouTube Video"
 
+        # Kortes Desktop: the account's plan decides. Paid plans cut freely; the free
+        # plan spends one of its cuts on this video or live (1 cut, watermarked).
+        free_claim = None
+        free_clips = 0
+        if runtime_config.desktop:
+            from ...desktop import SetupError, claim_free_clip
+
+            try:
+                claim = await claim_free_clip(runtime_config.kortes_site_url, raw_source["url"], source_type)
+            except SetupError as exc:
+                raise HTTPException(
+                    status_code=exc.status if exc.status in (401, 402, 403) else 400, detail=exc.message
+                )
+            free_claim = None if claim["pro"] else claim["source"]
+            free_clips = claim["clips"]
+
         async with generation_allowance_guard(
             db, user_id, enabled=runtime_config.monetization_enabled
         ):
@@ -535,7 +603,11 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 "webcam_region": webcam_region,
                 "hook_intro": hook_intro,
                 "clip_duration": clip_duration,
+                # "Exigência da IA": the minimum score (1-10) a live moment needs.
+                **({"min_score": LIVE_MIN_SCORES[strictness]} if strictness in LIVE_MIN_SCORES else {}),
+                **({} if title_overlay else {"title_overlay": False}),
                 "max_seconds": int(billing["max_youtube_duration_seconds"]),
+                **({"max_clips": free_clips, "watermark": True} if free_claim else {}),
             }
             try:
                 # Persist retry options before submitting the job; Redis remains a legacy cache.
@@ -552,7 +624,11 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                         clip_duration=clip_duration,
                         webcam_region=webcam_region,
                         hook_intro=hook_intro,
+                        clip_count=clip_count,
+                        strictness=strictness,
+                        title_overlay=title_overlay,
                     )
+                    | ({"watermark": True, "free_source": free_claim, "free_clips": free_clips} if free_claim else {})
                     | (
                         {
                             "live": True,
@@ -614,6 +690,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     progress_message="Unable to queue processing. Please retry this generation.",
                     expected_statuses=["queued"],
                 )
+                if free_claim:
+                    from ...desktop import release_free_clip
+
+                    await release_free_clip(runtime_config.kortes_site_url, free_claim)
                 raise
 
             logger.info(f"Task {task_id} created and job {job_id} enqueued")

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { notifyClipReady } from "@/lib/desktop-notify";
 
 type ProgressEvent = { progress?: number; message?: string; status?: string };
 
@@ -55,7 +56,10 @@ export function useTaskProgress<T>({ taskId, active, refresh, onProgress, onClip
     source.addEventListener("progress", progress);
     source.addEventListener("clip_ready", (event) => {
       const data = read(event);
-      if (data?.clip) callbacks.current.onClip(data.clip as T);
+      if (data?.clip) {
+        callbacks.current.onClip(data.clip as T);
+        void notifyClipReady(data.clip as { hook_title?: string | null });
+      }
     });
     source.addEventListener("show", (event) => {
       const data = read(event);

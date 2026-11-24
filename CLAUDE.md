@@ -87,7 +87,7 @@ utils/               → Thread pool helpers for blocking operations (async_help
 
 1. **Input** → YouTube URL (yt-dlp) or uploaded file. YouTube videos of `YOUTUBE_PARTIAL_DOWNLOAD_MIN_SECONDS`+ (default 20 min) download only their audio first (`youtube_sections.download_youtube_audio`); each clip then fetches just its own minutes (`download_youtube_section`: reads the mp4 `sidx` index and fetches header + first fragment + the part's fragments in 10 MB blocks over 6 connections, ported from SHARINGAN; falls back to an exact ffmpeg cut, then to the whole video). `services/clip_source.py` (`ClipSource`) times clips from the transcript cache and takes the picture from the section (`create_optimized_clip(render_source=...)`); the editor, caption edits and text adjustments use it too
 2. **Transcription** → AssemblyAI word-level timestamps (cached as `.transcript_cache.json`, which also stores `source_duration` and `voice_energy_db` so later edits work after the media is gone; `ffprobe_duration` falls back to it)
-3. **AI Analysis** → Voice energy per second (`media/voice_energy.py`, from SHARINGAN) marks transcript lines with 🔊/🔊🔊 where the volume jumps above the video's average; the marked transcript goes to the AI and the rerank sees each candidate's peak. Pydantic AI selects viral segments (15-60s each) with virality scoring. Transcripts over 15 min are analysed in 12-min windows (2-min overlap, 3 concurrent), deduplicated, then reranked together in one comparative call (`RERANK_LLM`, default `LLM`); final count scales ~1 clip per 5 min, capped by `MAX_CLIPS` (default 10)
+3. **AI Analysis** → Voice energy per second (`media/voice_energy.py`, from SHARINGAN) marks transcript lines with 🔊/🔊🔊 where the volume jumps above the video's average; the marked transcript goes to the AI and the rerank sees each candidate's peak. Pydantic AI selects viral segments (15-60s each) with virality scoring. Transcripts over 15 min are analysed in 12-min windows (2-min overlap, 3 concurrent), deduplicated, then reranked together in one comparative call (`RERANK_LLM`, default `LLM`); final count scales ~1 clip per 5 min, capped by `MAX_CLIPS` (default 10; 20 in desktop), unless the user picked a number (see "Video defaults" below)
 4. **Clip Generation** → MoviePy creates 9:16 clips with:
    - Face-centered cropping: MediaPipe → OpenCV DNN → Haar cascade (fallback chain)
    - Word-synced subtitles from AssemblyAI
@@ -144,6 +144,20 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   site (`KORTES_SITE_URL`, default `https://kortes.com.br`) with the license, device id and `KORTES_APP_VERSION`.
   The site is `site/` (Next.js on Vercel, Postgres): `/api/v1/*` for the app, `/painel` (password
   `ADMIN_PASSWORD`) to answer messages and publish announcements. See `site/README.md`.
+- **Accounts and plans:** the app signs in with email + password on the site (`/desktop/account/login|signup|
+  set-password|logout`, relayed to `site/` `/api/v1/auth/*`); the site hands back a session (`KORTES_ACCOUNT_TOKEN`,
+  saved encrypted) and the account's `kl_` license (saved as `OPENAI_API_KEY`, rotated on every sign-in). One PC per
+  account (`x-kortes-device`). Free plan: a balance of 15 cuts per PC, up to 5 per video/live (`desktop.claim_free_clip`
+  in `create_task` reserves them and returns the count; `desktop.settle_task_free_cuts`, called by the workers when
+  a free video/live ends, gives back what it did not make). A free video renders its highest-virality segments
+  (`task_service.best_segments`); a free live cuts its first moments as they happen and stops recording once they
+  are spent (`LiveOptions.max_clips`). Free cuts carry the moving translucent Kortes mark (`media/watermark.py`,
+  also on regenerate, adjust and editor export; browser export is off in desktop). Free tasks carry
+  `watermark`/`free_source`/`free_clips` in the source metadata. Desktop lives look every 60 s with 20 s pieces
+  (web: 120/30) so a moment is cut about a minute after it ends.
+  A `kl_` key typed before accounts still works with no limit. Plans come from Kirvano (`site/` `/api/kirvano`).
+  `/setup` and Configurações show the account card (`components/desktop/desktop-account.tsx`); the home page shows
+  the free cuts left. See `site/README.md`.
 - Videos up to 10 h (`MAX_VIDEO_DURATION` defaults to 36000 in desktop mode).
 - **Releases:** the code repo (kikitoBR/kortes) is private; a `v*` tag builds the installer in Actions and publishes
   it to the public **kikitoBR/kortes-releases** (secret `RELEASES_TOKEN`: fine-grained token, Contents read/write on
@@ -299,11 +313,11 @@ RENDER_MAX_JOBS=1                    # Clips one render worker makes at once
 RENDER_JOB_TIMEOUT_SECONDS=1800      # Also how long a vanished worker's clip waits before another worker takes it
 LIVE_CLIPPING_ENABLED=true           # Live links are recorded and clipped while they stream
 LIVE_MAX_CONCURRENT=2                # Lives recorded at once (live-worker max_jobs)
-LIVE_PIECE_SECONDS=30                # Recording piece length
+LIVE_PIECE_SECONDS=30                # Recording piece length (desktop default 20)
 LIVE_BUFFER_MAX_SECONDS=1200         # Hard cap on buffered live video
-LIVE_ANALYSIS_INTERVAL_SECONDS=120   # New speech between AI looks
+LIVE_ANALYSIS_INTERVAL_SECONDS=120   # New speech between AI looks (desktop default 60)
 LIVE_MIN_SCORE=6                     # Minimum AI score (1-10) for a live moment to become a clip
-LIVE_MAX_CLIPS=30
+LIVE_MAX_CLIPS=100                   # Safety cap; the minimum score is what limits a live
 LIVE_MAX_HEIGHT=1080                 # Recording quality cap (720 halves disk and bandwidth)
 LIVE_ARCHIVE_DAYS=7                  # How long each live clip's minutes stay for edits
 
@@ -391,6 +405,16 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
   thumbnails, waveform and the gameplay framing. Opening a clip also prepares the next `EDITOR_PREFETCH_CLIPS`
   (default 2) in list order, one job at a time (`prefetch_next_clip`); opening an already prepared clip moves the
   window forward (the page calls `/editor/prepare` on ready clips too).
+- **Video defaults** (Configurações → "Padrões para novos vídeos", `users.video_defaults` JSONB, camelCase keys,
+  `frontend/src/lib/video-defaults.ts`; read/written by `/api/preferences`): `clipCount` (null = automatic, or 5/10/15/20:
+  the AI is asked for that many, `ai.clip_count_targets`), `strictness` (`more`: automatic ~1 per 3 min and live min
+  score 5; `balanced`: as before; `best`: video keeps virality 70+ but at least 3, `task_service.strongest_segments`,
+  live min score 8), `clipDuration`, `outputFormat`, `titleOverlay` (false: the hook title is not drawn, still saved),
+  `hookIntro`; desktop only `exportDir` (a copy of every finished cut in `<dir>/<video title>/NN - <title>.mp4`,
+  `desktop.export_clip`, picked through the Electron bridge `window.kortesDesktop` in `desktop/src/preload.js`) and
+  `notifyDesktop` (a Windows notice on `clip_ready` when the app is not in front, `lib/desktop-notify.ts`). The home
+  form starts from them; `create_task` fills in what a request leaves out (API, MCP) and stores `clip_count`,
+  `strictness`, `title_overlay` in the task's source metadata.
 - Clip extras (on demand, nothing stored): `GET /tasks/{id}/clips/{clip_id}/cover[/suggest]` renders a cover JPEG (`media/covers.py`), `POST /tasks/{id}/clips/{clip_id}/post-texts` writes TikTok/Instagram/YouTube copy (`ai.generate_post_texts`, owner only)
 
 ## iOS App

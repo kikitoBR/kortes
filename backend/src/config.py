@@ -88,11 +88,15 @@ class Config:
         # few minutes; moments become clips while the stream goes on.
         self.live_clipping_enabled = self._get_bool_env("LIVE_CLIPPING_ENABLED", True)
         self.live_max_concurrent = max(1, int(env_or_default("LIVE_MAX_CONCURRENT", "2")))
-        self.live_piece_seconds = max(10, int(env_or_default("LIVE_PIECE_SECONDS", "30")))
+        # Kortes Desktop looks more often (its AI has no per-call cost to the customer):
+        # a moment is cut about a minute after it ends instead of two or three.
+        quick_live = (os.getenv("KORTES_EDITION") or "").strip().lower() == "desktop"
+        self.live_piece_seconds = max(10, int(env_or_default("LIVE_PIECE_SECONDS", "20" if quick_live else "30")))
         self.live_buffer_max_seconds = max(300, int(env_or_default("LIVE_BUFFER_MAX_SECONDS", "1200")))
-        self.live_analysis_interval_seconds = max(30, int(env_or_default("LIVE_ANALYSIS_INTERVAL_SECONDS", "120")))
+        self.live_analysis_interval_seconds = max(30, int(env_or_default("LIVE_ANALYSIS_INTERVAL_SECONDS", "60" if quick_live else "120")))
         self.live_min_score = max(1, min(10, int(env_or_default("LIVE_MIN_SCORE", "6"))))
-        self.live_max_clips = max(1, int(env_or_default("LIVE_MAX_CLIPS", "30")))
+        # A safety cap only: what limits a live's cuts is the minimum score.
+        self.live_max_clips = max(1, int(env_or_default("LIVE_MAX_CLIPS", "100")))
         self.live_max_height = max(0, int(env_or_default("LIVE_MAX_HEIGHT", "1080")))
         # Each clip keeps its own minutes of video for later edits this long.
         self.live_archive_days = max(1, int(env_or_default("LIVE_ARCHIVE_DAYS", "7")))
@@ -131,7 +135,9 @@ class Config:
         )
         self.output_dir = os.getenv("OUTPUT_DIR", "outputs")
 
-        self.max_clips = int(env_or_default("MAX_CLIPS", "10"))
+        # Automatic "Cortes por vídeo": about one clip per 5 minutes, up to this.
+        # Kortes Desktop goes to 20 (a long podcast has more than 10 good moments).
+        self.max_clips = int(env_or_default("MAX_CLIPS", "20" if desktop_edition else "10"))
         self.clip_duration = int(env_or_default("CLIP_DURATION", "30"))  # seconds
 
         self.temp_dir = os.getenv("TEMP_DIR", "temp")
@@ -281,7 +287,7 @@ class Config:
             if email.strip()
         )
         self.default_processing_mode = os.getenv("DEFAULT_PROCESSING_MODE", "fast")
-        self.fast_mode_max_clips = int(env_or_default("FAST_MODE_MAX_CLIPS", "10"))
+        self.fast_mode_max_clips = int(env_or_default("FAST_MODE_MAX_CLIPS", "20" if desktop_edition else "10"))
         # universal-2 is AssemblyAI's cheaper model; "universal" maps to universal-3-pro.
         self.fast_mode_transcript_model = env_or_default(
             "FAST_MODE_TRANSCRIPT_MODEL", "universal-2"

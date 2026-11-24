@@ -267,6 +267,23 @@ class Services {
         fs.rmSync(pwFile, { force: true });
       }
     }
+    // pg_ctl starts Postgres detached, so it outlives a Kortes that was killed (the
+    // installer closing it to update, a crash): that leftover holds the data folder and
+    // the new start fails. Stop ours first ("status" exits 0 only while it runs).
+    if (fs.existsSync(path.join(pgData, "postmaster.pid"))) {
+      const running = await run(bin("pg_ctl"), ["status", "-D", pgData]).then(() => true, () => false);
+      if (running) {
+        this.status("Fechando o banco da sessão anterior…");
+        this.log("Postgres da sessão anterior ainda rodando; parando");
+        try {
+          await run(bin("pg_ctl"), ["stop", "-D", pgData, "-m", "fast", "-w", "-t", "30"]);
+        } catch {
+          await run(bin("pg_ctl"), ["stop", "-D", pgData, "-m", "immediate", "-w", "-t", "30"]).catch((error) =>
+            this.log(`Postgres anterior não parou: ${error.message}`),
+          );
+        }
+      }
+    }
     await runAndForget(bin("pg_ctl"), [
       "start", "-w", "-t", "60", "-D", pgData, "-l", path.join(layout.logsDir, "postgres.log"),
       "-o", `-p ${this.ports.postgres} -h 127.0.0.1`,

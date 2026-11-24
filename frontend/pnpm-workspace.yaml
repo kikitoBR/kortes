@@ -1,0 +1,12 @@
+# Patched versions of packages Next.js and the auth library pull in (security).
+overrides:
+  postcss: 8.5.32
+  sharp: 0.35.5
+  zod: 4.6.7
+  tinypool: 2.2.0
+  browserslist: 4.29.5
+  '@babel/core': 7.29.13
+  baseline-browser-mapping: 2.11.35
+  effect: 3.22.4
+  ws: 8.22.2
+  source-map-js: 1.2.2

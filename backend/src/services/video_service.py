@@ -245,6 +245,8 @@ class VideoService:
         performance_context: Optional[str] = None,
         clip_duration: Optional[str] = "auto",
         voice_energy: Optional[List[float]] = None,
+        clip_count: Optional[int] = None,
+        strictness: Optional[str] = None,
     ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -257,6 +259,8 @@ class VideoService:
             performance_context=performance_context,
             clip_duration=clip_duration,
             voice_energy=voice_energy,
+            clip_count=clip_count,
+            strictness=strictness,
         )
         logger.info(
             f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found"
@@ -323,8 +327,13 @@ class VideoService:
         hook_intro: Optional[bool] = None,
         clip_source: Optional["ClipSource"] = None,
         show: Optional["ShowReporter"] = None,
+        watermark: bool = False,
+        title_overlay: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure.
+
+        ``watermark``: Kortes Desktop's free plan burns the Kortes mark into the clip
+        (a clip without it is never handed out on that plan).
 
         ``video_path`` times the clip (word timings, sentence snapping, cleanup,
         teaser). With ``clip_source`` the picture comes from a section of the
@@ -406,7 +415,7 @@ class VideoService:
                         {"text": w["text"], "start": round(w["start"], 2), "end": round(w["end"], 2)}
                         for w in timed
                     ],
-                    title=segment.get("hook_title"),
+                    title=segment.get("hook_title") if title_overlay else None,
                     words_per_line=caption_words_per_line(caption_template),
                 )
             if clip_source is not None:
@@ -429,7 +438,8 @@ class VideoService:
                 caption_template,
                 output_format,
                 keep_ranges,
-                segment.get("hook_title"),
+                # "Título no início" off: the title is kept on the clip, not drawn on it.
+                segment.get("hook_title") if title_overlay else None,
                 webcam_region=webcam_region,
                 hook_rewind=hook_intro is True,
                 render_source=render_source,
@@ -441,6 +451,13 @@ class VideoService:
             if not success:
                 logger.error(f"Failed to create clip {clip_index + 1}")
                 return None
+            if watermark:
+                from ..media.watermark import apply_watermark
+
+                if not await run_in_thread(apply_watermark, clip_path):
+                    logger.error("Watermark failed on clip %d; dropping it", clip_index + 1)
+                    clip_path.unlink(missing_ok=True)
+                    return None
 
             save_clip_source_ranges(clip_path, keep_ranges)
             cleaned_duration = sum(end - start for start, end in keep_ranges)
@@ -519,9 +536,13 @@ class VideoService:
         should_cancel: Optional[Callable[[], Awaitable[bool]]] = None,
         performance_context: Optional[str] = None,
         clip_duration: Optional[str] = "auto",
+        clip_count: Optional[int] = None,
+        strictness: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
+
+        ``clip_count``: how many clips the user asked for (None: automatic).
         Returns dict with segments and clips info.
 
         progress_callback: Optional function to call with progress updates
@@ -695,6 +716,8 @@ class VideoService:
                     performance_context=performance_context,
                     clip_duration=clip_duration,
                     voice_energy=voice_energy,
+                    clip_count=clip_count,
+                    strictness=strictness,
                 )
 
             # Step 4: Create clips
@@ -756,6 +779,8 @@ class VideoService:
             clip_limit = runtime_config.max_clips
             if processing_mode == "fast":
                 clip_limit = min(clip_limit, runtime_config.fast_mode_max_clips)
+            if clip_count:
+                clip_limit = clip_count
             segments_json = segments_json[: max(1, clip_limit)]
 
             if not segments_json:

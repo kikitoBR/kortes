@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Syne } from "next/font/google";
 
 import { Backstage } from "./backstage";
 import { DownloadButton } from "./download-button";
+import { geist, syne } from "./fonts";
 import { HeroCut } from "./hero-cut";
+import { Pricing } from "./pricing";
 import { latestRelease } from "./release";
 import "./landing.css";
 
-const syne = Syne({ subsets: ["latin", "latin-ext"], weight: ["600", "700", "800"], variable: "--font-syne" });
-const geist = Geist({ subsets: ["latin", "latin-ext"], variable: "--font-geist" });
 
 const TITLE = "Kortes · Corte a live enquanto ela acontece";
 const DESCRIPTION =
@@ -65,6 +64,9 @@ const STEPS = [
 ] as const;
 
 const FAQ = [
+  { q: "Como funciona o plano grátis?", a: "Você cria a conta no próprio Kortes e ganha 15 cortes, até 5 por vídeo ou live, de qualquer duração, com a marca d'água do Kortes. No vídeo vêm os 5 melhores momentos; se ele render menos, o que sobrar fica para o próximo. Para cortar sem limite, assine o Pro." },
+  { q: "Comprei. Como entro no Kortes?", a: "Abra o Kortes e entre com o mesmo e-mail da compra. No primeiro acesso você cria a sua senha." },
+  { q: "Posso usar em mais de um computador?", a: "Cada conta funciona em um computador. Se trocar de PC, fale com o suporte pelo botão de mensagens do app." },
   { q: "Preciso pagar uma assinatura de IA à parte?", a: "Não. A IA que escolhe e revisa os cortes já vem na licença do Kortes: sem créditos e sem cobrança extra." },
   { q: "Em quais plataformas funciona?", a: "Lives da Twitch, da Kick e do YouTube enquanto estão no ar, e vídeos do YouTube ou arquivos seus de até 10 horas." },
   { q: "Roda em qual sistema?", a: "Windows 10 e 11 (64 bits). O Kortes é um programa: os vídeos são processados no seu computador." },
@@ -110,6 +112,7 @@ export default async function Home() {
           <a href="#ao-vivo">Ao vivo</a>
           <a href="#como-funciona">Como funciona</a>
           <a href="#recursos">Recursos</a>
+          <a href="#planos">Planos</a>
           <a href="#perguntas">Perguntas</a>
         </nav>
         <a className="lp-btn lp-btn-sm" href="#baixar">Baixar</a>
@@ -203,6 +206,12 @@ export default async function Home() {
         <Backstage />
       </section>
 
+      <section id="planos" className="lp-section">
+        <p className="lp-eyebrow">Planos</p>
+        <h2 className="lp-h2">Comece grátis. <span>Corte sem limite no Pro.</span></h2>
+        <Pricing />
+      </section>
+
       <section id="perguntas" className="lp-section">
         <p className="lp-eyebrow">Perguntas</p>
         <h2 className="lp-h2">Antes de baixar</h2>
@@ -231,6 +240,7 @@ export default async function Home() {
           <a href="#ao-vivo">Ao vivo</a>
           <a href="#como-funciona">Como funciona</a>
           <a href="#recursos">Recursos</a>
+          <a href="#planos">Planos</a>
           <a href="#perguntas">Perguntas</a>
           <a href="#baixar">Baixar</a>
         </nav>

@@ -2,7 +2,10 @@
 
 O site do Kortes (Next.js, na Vercel). Por enquanto:
 
-- `/`: página "em breve" (a landing vem depois)
+- `/`: a landing. O hero (`src/app/hero-cut.tsx`) corta uma live 16:9 com a tesoura conforme a rolagem e
+  monta o corte vertical num celular, tudo num canvas a partir de `public/hero/live.mp4` (`live-540.mp4` no
+  celular); os recortes de webcam/jogo são os do detector do Kortes. "Bastidores" (`src/app/backstage.tsx`)
+  mostra os agentes montando o corte. Estilos em `src/app/landing.css` (tudo sob `.lp`).
 - `/painel`: gerenciamento, protegido por senha (fora do Google: `noindex` e `robots.txt`)
   - **Mensagens:** suporte e feedback enviados pelo Kortes Desktop. Sua resposta aparece no app do cliente.
   - **Avisos:** as "Novidades" que aparecem no app de todos os clientes (link externo ou página do app).

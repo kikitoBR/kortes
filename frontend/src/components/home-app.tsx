@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   AlertCircle, ArrowRight, ArrowUp, Captions, CaptionsOff, Check, ChevronDown, Clock, Crop, FileVideo,
-  Loader2, Paintbrush, Paperclip, Rewind, Upload, Wand2, X, Youtube,
+  Loader2, Paintbrush, Paperclip, Rewind, ScanFace, Upload, Wand2, X, Youtube,
 } from "lucide-react";
 import { CaptionSizeControl } from "@/components/caption-size-control";
 import { FONT_SEARCH_THRESHOLD, getYouTubeFrameUrls, getYouTubeThumbnailUrl, uploadVideoFile } from "@/lib/video-upload";
@@ -394,10 +394,13 @@ export default function HomeApp() {
 
         <div className="mx-auto max-w-3xl animate-rise">
           <h1 className="text-center font-display text-3xl font-bold tracking-tight sm:text-[2.6rem] sm:leading-tight">
-            {greeting(session.user.name)}
+            {/* Kortes Desktop has no account name (the local user is "Você"): greet without one. */}
+            {isDesktop ? `${greeting(null)}! O que vamos cortar hoje?` : greeting(session.user.name)}
           </h1>
           <p className="mt-2 text-center text-muted-foreground">
-            Envie um vídeo longo. Receba clipes legendados e prontos para publicar.
+            {isDesktop
+              ? "Cole o link de uma live ou de um vídeo. O Kortes entrega os cortes prontos para postar."
+              : "Envie um vídeo longo. Receba clipes legendados e prontos para publicar."}
           </p>
 
           {upgradeState && <PlanStatusNudge state={upgradeState} onUpgrade={openUpgrade} />}
@@ -594,6 +597,30 @@ export default function HomeApp() {
                   collisionPadding={12}
                   className="max-h-[var(--radix-popover-content-available-height)] w-[min(92vw,420px)] overflow-y-auto overscroll-contain rounded-2xl p-3"
                 >
+                  {/* With a webcam layout, where the webcam is matters most: keep it on top, not below the fold. */}
+                  {WEBCAM_LAYOUTS.includes(outputFormat) ? (
+                    <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-brand/30 bg-brand-soft/60 p-3">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <ScanFace className="size-5 shrink-0 text-brand" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">Posição da webcam</p>
+                          <p className="text-xs text-muted-foreground">
+                            {webcamRegion ? "Marcada por você" : hasSource ? "Automática (pelo rosto). Marque se errar." : "Cole o link para marcar"}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {webcamRegion ? (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setWebcamRegion(null)}>
+                            Automático
+                          </Button>
+                        ) : null}
+                        <Button type="button" size="sm" disabled={!hasSource} onClick={() => setWebcamDialogOpen(true)}>
+                          {webcamRegion ? "Ajustar" : "Marcar webcam"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Enquadramento</p>
                   <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Enquadramento">
                     {FRAMINGS.map((framing) => (
@@ -611,28 +638,19 @@ export default function HomeApp() {
                       </button>
                     ))}
                   </div>
-                  {WEBCAM_LAYOUTS.includes(outputFormat) ? (
-                    <div className="mt-3 flex items-center justify-between gap-3 border-t px-1 pt-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">Posição da webcam</p>
-                        <p className="text-xs text-muted-foreground">
-                          {webcamRegion ? "Marcada manualmente" : "Detectada pelo rosto"}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        {webcamRegion ? (
-                          <Button type="button" variant="ghost" size="sm" onClick={() => setWebcamRegion(null)}>
-                            Automático
-                          </Button>
-                        ) : null}
-                        <Button type="button" variant="outline" size="sm" disabled={!hasSource} onClick={() => setWebcamDialogOpen(true)}>
-                          {webcamRegion ? "Ajustar" : "Marcar webcam"}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
                 </PopoverContent>
               </Popover>
+
+              {WEBCAM_LAYOUTS.includes(outputFormat) && (
+                <Chip
+                  active={Boolean(webcamRegion)}
+                  disabled={controlsDisabled || !hasSource}
+                  onClick={() => setWebcamDialogOpen(true)}
+                  title={hasSource ? "Marque onde fica a webcam na live ou no vídeo" : "Cole o link primeiro"}
+                >
+                  <ScanFace className="size-3.5" />{webcamRegion ? "Webcam marcada" : "Marcar webcam"}
+                </Chip>
+              )}
 
               <Dialog open={webcamDialogOpen} onOpenChange={setWebcamDialogOpen}>
                 <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto">

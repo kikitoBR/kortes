@@ -145,6 +145,10 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   The site is `site/` (Next.js on Vercel, Postgres): `/api/v1/*` for the app, `/painel` (password
   `ADMIN_PASSWORD`) to answer messages and publish announcements. See `site/README.md`.
 - Videos up to 10 h (`MAX_VIDEO_DURATION` defaults to 36000 in desktop mode).
+- **Releases:** the code repo (kikitoBR/kortes) is private; a `v*` tag builds the installer in Actions and publishes
+  it to the public **kikitoBR/kortes-releases** (secret `RELEASES_TOKEN`: fine-grained token, Contents read/write on
+  that repo). electron-updater (`desktop/package.json` `build.publish`) and the site's download button
+  (`site/src/app/release.ts`) read from there.
 - AI calls get twice their time budget (`AI_TIMEOUT_SCALE`, default 2 in desktop): the license server answers slower
   than a provider. Its refusals (`code` in the OpenAI-shaped error) are not retried: `quota_exceeded` shows a
   neutral "IA indisponível, fale com o suporte" (customers never see the quota), blocked/expired/device-limit

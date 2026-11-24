@@ -88,7 +88,7 @@
 @media (max-width: 820px) {
   .lp-hero-intro { top: calc(env(safe-area-inset-top, 0px) + 92px); }
   .lp-hero-intro .lp-lead { font-size: 15px; margin-top: 16px; }
-  .lp-scroll-hint { display: none; }
+  .lp-scroll-hint, .lp-hero-intro .lp-trust { display: none; }
   .lp-hero-intro .lp-cta-row { flex-wrap: nowrap; gap: 8px; margin-top: 20px; }
   .lp-hero-intro .lp-btn { height: 46px; padding: 0 14px; font-size: 14px; border-radius: 13px; white-space: nowrap; }
 }
@@ -118,6 +118,14 @@
   .lp-hero[data-still="1"] .lp-hero-intro { top: 10vh; translate: none; max-width: none; right: 16px; }
 }
 
+/* accessibility and small bits */
+.lp-skip { position: absolute !important; left: 12px; top: -60px; z-index: 100 !important; padding: 10px 16px; border-radius: 10px; background: var(--ink); color: #fff; font-weight: 700; }
+.lp-skip:focus { top: 12px; }
+.lp :focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; border-radius: 8px; }
+.lp-trust { margin: 14px 0 0; font-size: 14px; font-weight: 600; color: #57534e; }
+.lp-dl { display: flex; flex-direction: column; align-items: center; margin-top: 30px; }
+.lp-dl .lp-small { margin-top: 12px; text-align: center; }
+
 /* sections */
 .lp-section { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: clamp(80px, 12vw, 150px) 0 0; scroll-margin-top: -40px; }
 .lp-race { margin-top: 44px; padding: clamp(22px, 3vw, 40px); }
@@ -128,11 +136,21 @@
 .lp-race-bar { height: 16px; border-radius: 99px; background: rgba(12, 10, 9, 0.06); overflow: hidden; }
 .lp-race-bar i { display: block; height: 100%; border-radius: 99px; }
 .lp-race-k { width: 7%; background: var(--brand); }
-.lp-race-o { width: 100%; background: repeating-linear-gradient(-45deg, #c7c2bd 0 12px, #ddd8d3 12px 24px); }
+.lp-race-o { width: 100%; background: repeating-linear-gradient(-45deg, #c7c2bd 0 12px, #ddd8d3 12px 24px); animation: lp-stripes 1.2s linear infinite; }
+@keyframes lp-stripes { to { background-position: 34px 0; } }
+@supports (animation-timeline: view()) {
+  .lp-race-k { animation: lp-grow-k linear both; animation-timeline: view(); animation-range: entry 20% cover 40%; }
+  .lp-race-o { animation: lp-stripes 1.2s linear infinite, lp-grow-o linear both; animation-timeline: auto, view(); animation-range: normal, entry 20% cover 60%; }
+  @keyframes lp-grow-k { from { width: 0; } to { width: 7%; } }
+  @keyframes lp-grow-o { from { width: 0; } to { width: 100%; } }
+}
 @media (max-width: 700px) { .lp-race-row { grid-template-columns: 1fr auto; } .lp-race-bar { grid-column: 1 / -1; order: 3; } .lp-race-v { font-size: 14px; white-space: normal; text-align: right; } }
 
 .lp-steps { list-style: none; padding: 0; margin: 44px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
 .lp-steps li { padding: 30px; }
+.lp-step-top { display: flex; align-items: center; justify-content: space-between; }
+.lp-icon { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--soft); color: var(--brand); flex: none; }
+.lp-tile .lp-icon { margin-bottom: 14px; }
 .lp-step-n { font-family: var(--font-syne); font-weight: 800; font-size: 44px; color: var(--brand); letter-spacing: -0.04em; }
 .lp-steps h3, .lp-tile h3 { font-size: 22px; letter-spacing: -0.01em; margin: 12px 0 8px; }
 .lp-steps p, .lp-tile p { margin: 0; color: #57534e; }
@@ -224,8 +242,14 @@
 .lp-final .lp-h2 { max-width: 14ch; }
 .lp-final .lp-cta-row { justify-content: center; }
 
-.lp-footer { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 40px; border-top: 1px solid rgba(12, 10, 9, 0.08); display: flex; justify-content: space-between; color: var(--muted); font-size: 14px; }
-.lp-footer span { display: inline-flex; align-items: center; gap: 8px; }
+.lp-footer { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 44px; border-top: 1px solid rgba(12, 10, 9, 0.08); display: grid; grid-template-columns: 1fr auto; gap: 18px 40px; color: var(--muted); font-size: 14px; }
+.lp-footer p { margin: 8px 0 0; }
+.lp-footer nav { display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: flex-start; }
+.lp-footer nav a { color: #57534e; font-weight: 500; }
+.lp-footer nav a:hover { color: var(--ink); }
+.lp-footer-copy { grid-column: 1 / -1; margin: 0 !important; font-size: 13px; }
+.lp-logo-sm { font-size: 19px; }
+@media (max-width: 700px) { .lp-footer { grid-template-columns: 1fr; } }
 
 /* sections slide in as they come into view (where the browser supports it) */
 @supports (animation-timeline: view()) {

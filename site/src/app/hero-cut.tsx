@@ -486,6 +486,7 @@ export function HeroCut() {
             <a className="lp-btn" href="#baixar">Baixar para Windows</a>
             <a className="lp-btn lp-btn-ghost" href="#como-funciona">Ver como funciona</a>
           </div>
+          <p className="lp-trust">IA inclusa · sem créditos · Windows 10 e 11</p>
           <p className="lp-scroll-hint">role para cortar ✂</p>
         </div>
         <div ref={outro} className="lp-hero-outro">

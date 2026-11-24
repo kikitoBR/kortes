@@ -8,6 +8,11 @@ const path = require("node:path");
 const { layout } = require("./paths");
 const { Services } = require("./services");
 
+// Windows: Chromium's "is the window covered?" check sometimes decides the
+// window is hidden and stops painting it, so Kortes looked frozen until an
+// Alt+Tab forced a repaint. Painting is cheap here; always paint.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+
 let mainWindow = null;
 let services = null;
 let quitting = false;
@@ -122,7 +127,15 @@ async function start() {
     icon: ICON,
     backgroundColor: "#faf8f5",
     autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, sandbox: true },
+    // Keep timers and progress updates at full speed when the window is behind others.
+    webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: false },
+  });
+  // If the page ever hangs or dies, say so in kortes.log; a dead page reloads itself.
+  mainWindow.webContents.on("unresponsive", () => log("a página parou de responder"));
+  mainWindow.webContents.on("responsive", () => log("a página voltou a responder"));
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    log(`a página caiu (${details.reason}); recarregando`);
+    if (!quitting && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
   });
   showSplash(mainWindow, "Abrindo o Kortes…");
 

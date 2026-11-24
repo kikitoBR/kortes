@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import { Geist, Syne } from "next/font/google";
 
 import { Backstage } from "./backstage";
+import { DownloadButton } from "./download-button";
 import { HeroCut } from "./hero-cut";
+import { latestRelease } from "./release";
 import "./landing.css";
 
 const syne = Syne({ subsets: ["latin", "latin-ext"], weight: ["600", "700", "800"], variable: "--font-syne" });
 const geist = Geist({ subsets: ["latin", "latin-ext"], variable: "--font-geist" });
-
-const DOWNLOAD_URL = "https://github.com/kikitoBR/kortes/releases/latest";
 
 const TITLE = "Kortes · Corte a live enquanto ela acontece";
 const DESCRIPTION =
@@ -39,11 +39,30 @@ function Scissors({ size = 28 }: { size?: number }) {
   );
 }
 
+// Small line icons (24px, stroke = currentColor).
+const ICONS: Record<string, React.ReactNode> = {
+  link: <path d="M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.2 1.2M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.2-1.2" />,
+  wave: <path d="M3 12h2m3-5v10m4-14v18m4-12v6m4-3h1" />,
+  check: <path d="M20 6 9 17l-5-5" />,
+  frame: <><rect x="7" y="2" width="10" height="20" rx="2.5" /><path d="M7 9h10" /></>,
+  text: <path d="M4 7V5h16v2M9 19h6M12 5v14" />,
+  spark: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" />,
+  live: <><circle cx="12" cy="12" r="2.5" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4m8.4 0a6 6 0 0 0 0-8.4M4.9 4.9a10 10 0 0 0 0 14.2m14.2 0a10 10 0 0 0 0-14.2" /></>,
+  pc: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>,
+};
+function Icon({ name }: { name: keyof typeof ICONS }) {
+  return (
+    <span className="lp-icon" aria-hidden>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{ICONS[name]}</svg>
+    </span>
+  );
+}
+
 const STEPS = [
-  { n: "01", t: "Cole o link", d: "A live da Twitch, da Kick ou do YouTube, ou um vídeo de até 10 horas." },
-  { n: "02", t: "A IA assiste com você", d: "Grava, transcreve e mede os picos de voz enquanto a live está no ar." },
-  { n: "03", t: "O corte chega pronto", d: "Vertical, com legenda, título e webcam enquadrada. É só postar." },
-];
+  { n: "01", icon: "link", t: "Cole o link", d: "A live da Twitch, da Kick ou do YouTube, ou um vídeo de até 10 horas." },
+  { n: "02", icon: "wave", t: "A IA assiste com você", d: "Grava, transcreve e mede os picos de voz enquanto a live está no ar." },
+  { n: "03", icon: "check", t: "O corte chega pronto", d: "Vertical, com legenda, título e webcam enquadrada. É só postar." },
+] as const;
 
 const FAQ = [
   { q: "Preciso pagar uma assinatura de IA à parte?", a: "Não. A IA que escolhe e revisa os cortes já vem na licença do Kortes: sem créditos e sem cobrança extra." },
@@ -54,9 +73,33 @@ const FAQ = [
   { q: "E se eu precisar de ajuda?", a: "O botão de mensagens dentro do Kortes fala direto com a equipe. A resposta chega ali mesmo." },
 ];
 
-export default function Home() {
+export default async function Home() {
+  const release = await latestRelease();
+  const meta = ["Windows 10 e 11 · 64 bits", release.version && `versão ${release.version}`, release.sizeMb && `${release.sizeMb} MB`]
+    .filter(Boolean)
+    .join(" · ");
+  // What Google reads: the app and the FAQ.
+  const jsonLd = [
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: "Kortes",
+      operatingSystem: "Windows 10, Windows 11",
+      applicationCategory: "MultimediaApplication",
+      description: DESCRIPTION,
+      url: "https://kortes.com.br",
+      ...(release.version ? { softwareVersion: release.version } : {}),
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: FAQ.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),
+    },
+  ];
   return (
-    <main className={`lp ${syne.variable} ${geist.variable}`}>
+    <main id="conteudo" className={`lp ${syne.variable} ${geist.variable}`}>
+      <a className="lp-skip" href="#ao-vivo">Pular para o conteúdo</a>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <div className="lp-bg" aria-hidden>
         <i /><i /><i />
       </div>
@@ -98,7 +141,7 @@ export default function Home() {
         <ol className="lp-steps">
           {STEPS.map((s) => (
             <li key={s.n} className="lp-glass lp-reveal">
-              <span className="lp-step-n">{s.n}</span>
+              <div className="lp-step-top"><span className="lp-step-n">{s.n}</span><Icon name={s.icon} /></div>
               <h3>{s.t}</h3>
               <p>{s.d}</p>
             </li>
@@ -111,7 +154,7 @@ export default function Home() {
         <h2 className="lp-h2">Tudo que um editor faria. <span>Sem esperar.</span></h2>
         <div className="lp-bento">
           <article className="lp-glass lp-tile lp-tile-wide lp-reveal">
-            <h3>Enquadramento automático</h3>
+            <Icon name="frame" /><h3>Enquadramento automático</h3>
             <p>Acha a webcam do streamer e monta o 9:16: rosto em cima, jogo embaixo, centralizado.</p>
             <div className="lp-frame-demo" aria-hidden>
               <div className="lp-fd-src"><i className="lp-fd-cam" /><i className="lp-fd-game" /></div>
@@ -120,24 +163,24 @@ export default function Home() {
             </div>
           </article>
           <article className="lp-glass lp-tile lp-reveal">
-            <h3>Legenda palavra a palavra</h3>
+            <Icon name="text" /><h3>Legenda palavra a palavra</h3>
             <p className="lp-caption-demo"><span>O QUE É</span> <b>ISSO?</b></p>
           </article>
           <article className="lp-glass lp-tile lp-reveal">
-            <h3>Título que prende</h3>
+            <Icon name="spark" /><h3>Título que prende</h3>
             <p>A IA escreve o gancho do topo nos primeiros segundos de cada corte.</p>
           </article>
           <article className="lp-glass lp-tile lp-reveal">
-            <h3>Ajustar escrevendo</h3>
+            <Icon name="spark" /><h3>Ajustar escrevendo</h3>
             <p className="lp-type-demo">começa 3 s antes</p>
             <p>A IA refaz o corte do jeito que você pediu.</p>
           </article>
           <article className="lp-glass lp-tile lp-reveal">
-            <h3>Twitch, Kick e YouTube</h3>
+            <Icon name="live" /><h3>Twitch, Kick e YouTube</h3>
             <p>Lives no ar e vídeos de até 10 horas.</p>
           </article>
           <article className="lp-glass lp-tile lp-reveal">
-            <h3>No seu computador</h3>
+            <Icon name="pc" /><h3>No seu computador</h3>
             <p>Um programa para Windows que se atualiza sozinho.</p>
           </article>
         </div>
@@ -176,15 +219,22 @@ export default function Home() {
       <section id="baixar" className="lp-section lp-final">
         <Scissors size={72} />
         <h2 className="lp-h2">Corte a live <span>enquanto ela acontece.</span></h2>
-        <div className="lp-cta-row">
-          <a className="lp-btn" href={DOWNLOAD_URL}>Baixar para Windows</a>
-        </div>
-        <p className="lp-small">Windows 10 e 11 · 64 bits · a licença é ativada no primeiro uso</p>
+        <DownloadButton href={release.url} meta={`${meta} · a licença é ativada no primeiro uso`} />
       </section>
 
       <footer className="lp-footer">
-        <span><Scissors size={20} /> Kortes</span>
-        <span>© {new Date().getFullYear()} Kortes</span>
+        <div>
+          <a href="#" className="lp-logo lp-logo-sm"><Scissors size={22} /> Kortes</a>
+          <p>Cortes virais da sua live, enquanto ela acontece.</p>
+        </div>
+        <nav aria-label="Rodapé">
+          <a href="#ao-vivo">Ao vivo</a>
+          <a href="#como-funciona">Como funciona</a>
+          <a href="#recursos">Recursos</a>
+          <a href="#perguntas">Perguntas</a>
+          <a href="#baixar">Baixar</a>
+        </nav>
+        <p className="lp-footer-copy">© {new Date().getFullYear()} Kortes · Feito no Brasil</p>
       </footer>
     </main>
   );

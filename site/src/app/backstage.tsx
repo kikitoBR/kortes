@@ -59,7 +59,8 @@ export function Backstage() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = cv.clientWidth;
       const h = cv.clientHeight;
-      if (cv.width !== Math.round(w * dpr)) {
+      // Height too: on some phones the layout settles after the first frame.
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
         cv.width = Math.round(w * dpr);
         cv.height = Math.round(h * dpr);
       }
@@ -122,7 +123,9 @@ export function Backstage() {
         const ox = (P.w - dw) / 2;
         const oy = y + (h - dh) / 2;
         p.translate(0, (1 - k) * 30);
-        p.drawImage(vid, r.x, r.y, r.w, r.h, ox, oy, dw, dh);
+        // Crops are in 1600x900 terms; phones load the 960x540 copy of the live.
+        const vk = (vid.videoWidth || SRC.w) / SRC.w;
+        p.drawImage(vid, r.x * vk, r.y * vk, r.w * vk, r.h * vk, ox, oy, dw, dh);
         p.restore();
       };
       slot(CAM, 0, camH, ease(prog(t, 1.9, 2.4)));

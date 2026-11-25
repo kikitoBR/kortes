@@ -1,27 +1,49 @@
 import Link from "next/link";
 import { db, describeDbError } from "@/lib/db";
 import { logout } from "./actions";
+import { Icon, Scissors } from "../brand";
 
-export function Shell({ active, children }: { active: "mensagens" | "avisos" | "clientes" | "pagamentos"; children: React.ReactNode }) {
+const NAV = [
+  { key: "mensagens", href: "/painel", label: "Mensagens", icon: "inbox" },
+  { key: "clientes", href: "/painel/clientes", label: "Clientes", icon: "users" },
+  { key: "pagamentos", href: "/painel/pagamentos", label: "Pagamentos", icon: "card" },
+  { key: "avisos", href: "/painel/avisos", label: "Avisos", icon: "megaphone" },
+] as const;
+
+/** Messages waiting for an answer, for the menu's counter (0 when the database is not there). */
+async function openThreads(): Promise<number> {
+  try {
+    const sql = await db();
+    const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM support_threads WHERE status = 'open'`;
+    return row?.n ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function Shell({ active, children }: { active: (typeof NAV)[number]["key"]; children: React.ReactNode }) {
+  const open = await openThreads();
   return (
-    <div className="shell">
-      <header className="topbar">
-        <Link href="/painel" className="brand">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" width={28} height={28} />
-          Painel do Kortes
+    <div className="pnl">
+      <aside className="pnl-side">
+        <Link href="/painel" className="pnl-brand">
+          <Scissors size={28} />
+          <span>Kortes<small>Painel</small></span>
         </Link>
-        <nav aria-label="Painel">
-          <Link href="/painel" aria-current={active === "mensagens" ? "page" : undefined}>Mensagens</Link>
-          <Link href="/painel/avisos" aria-current={active === "avisos" ? "page" : undefined}>Avisos</Link>
-          <Link href="/painel/clientes" aria-current={active === "clientes" ? "page" : undefined}>Clientes</Link>
-          <Link href="/painel/pagamentos" aria-current={active === "pagamentos" ? "page" : undefined}>Pagamentos</Link>
+        <nav className="pnl-nav" aria-label="Painel">
+          {NAV.map((item) => (
+            <Link key={item.key} href={item.href} aria-current={active === item.key ? "page" : undefined}>
+              <Icon name={item.icon} />
+              <span className="label">{item.label}</span>
+              {item.key === "mensagens" && open ? <span className="count">{open}</span> : null}
+            </Link>
+          ))}
         </nav>
         <form action={logout}>
-          <button type="submit" className="ghost">Sair</button>
+          <button type="submit"><Icon name="logout" /><span>Sair</span></button>
         </form>
-      </header>
-      {children}
+      </aside>
+      <main className="pnl-main">{children}</main>
     </div>
   );
 }
@@ -49,9 +71,9 @@ export async function painelDb() {
 export function SetupNotice({ message }: { message: string }) {
   return (
     <div className="card stack">
-      <h1 style={{ fontSize: 20 }}>O painel ainda não consegue usar o banco</h1>
-      <p className="error" style={{ margin: 0 }}>{message}</p>
-      <p className="muted small" style={{ margin: 0 }}>
+      <h1 style={{ fontSize: 22 }}>O painel ainda não consegue usar o banco</h1>
+      <p className="alert error">{message}</p>
+      <p className="muted small">
         Na Vercel: Storage → conecte um banco Neon ao projeto (isso cria DATABASE_URL), depois Deployments → Redeploy.
       </p>
     </div>

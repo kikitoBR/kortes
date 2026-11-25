@@ -27,9 +27,7 @@ export default async function Mensagens({ searchParams }: { searchParams: Promis
       <div className="pagehead">
         <div>
           <h1>Mensagens</h1>
-          <p className="muted small" style={{ margin: "4px 0 0" }}>
-            Suporte e feedback enviados pelo app. {counts.open ? `${counts.open} aguardando resposta.` : "Nada pendente."}
-          </p>
+          <p>Suporte e feedback enviados pelo app. {counts.open ? `${counts.open} aguardando resposta.` : "Nada pendente."}</p>
         </div>
         <nav className="filters" aria-label="Filtrar">
           {FILTERS.map((f) => (
@@ -40,7 +38,7 @@ export default async function Mensagens({ searchParams }: { searchParams: Promis
         </nav>
       </div>
       {threads.length === 0 ? (
-        <div className="card muted">Nenhuma mensagem aqui.</div>
+        <div className="card muted" style={{ textAlign: "center", padding: 40 }}>Nenhuma mensagem aqui.</div>
       ) : (
         <ul className="list">
           {threads.map((t) => (

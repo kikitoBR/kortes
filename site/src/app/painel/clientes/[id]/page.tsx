@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { accountById, FREE_CLIPS, FREE_CLIPS_PER_VIDEO, isPro, PLAN_LABELS, PLANS } from "@/lib/accounts";
 import { formatDate, painelDb, SetupNotice, Shell } from "../../shell";
+import { Icon } from "../../../brand";
 import { addFreeClips, changePlan, makeResetLink, releaseDevice, resetFreeClips, saveNotes, toggleBlock } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -32,55 +33,81 @@ export default async function ClientPage({ params, searchParams }: {
   const used = clips.reduce((sum, c) => sum + c.clips, 0);
   const until = account.plan_until ? new Date(account.plan_until).toISOString().slice(0, 10) : "";
   const hidden = <input type="hidden" name="account" value={account.id} />;
+  const paid = isPro(account);
+  const planTone = account.status === "blocked" ? "blocked" : paid ? "pro" : account.plan !== "free" ? "expired" : "free";
+  const planLabel = account.status === "blocked" ? "Bloqueada" : paid ? PLAN_LABELS[account.plan] : account.plan !== "free" ? `${PLAN_LABELS[account.plan]} vencido` : "Grátis";
   return (
     <Shell active="clientes">
-      <div className="stack">
-        <Link href="/painel/clientes" className="muted small">← Clientes</Link>
-        <div className="row spread">
-          <h1 style={{ fontSize: 22 }}>{account.email}</h1>
-          <span className={isPro(account) ? "" : "muted"}>{isPro(account) ? PLAN_LABELS[account.plan] : "Grátis"}{account.status === "blocked" ? " · bloqueada" : ""}</span>
+      <Link href="/painel/clientes" className="back"><Icon name="arrowLeft" size={15} /> Clientes</Link>
+      <div className="pagehead">
+        <div>
+          <h1 style={{ overflowWrap: "anywhere" }}>{account.email}</h1>
+          <p>{account.name || "Sem nome"} · conta criada em {formatDate(account.created_at)} · via {account.source === "kirvano" ? "compra na Kirvano" : account.source === "painel" ? "painel" : "app"}</p>
         </div>
-        {aviso ? <p className="card" style={{ margin: 0 }}>{aviso}</p> : null}
+        <span className={`badge ${planTone}`}>{planLabel}</span>
+      </div>
+
+      <div className="stack">
+        {aviso ? <p className="alert ok">{aviso}</p> : null}
         {link ? (
           <div className="card stack">
-            <b>Link para criar uma nova senha (vale 24 h)</b>
+            <h2 className="card-title"><Icon name="key" /> Link para criar uma nova senha (vale 24 h)</h2>
             <input readOnly value={link} />
             <span className="muted small">Mande para o cliente pelo canal que preferir.</span>
           </div>
         ) : null}
 
-        <div className="card stack">
-          <h2 style={{ fontSize: 16 }}>Plano</h2>
-          <form action={changePlan} className="row">
-            {hidden}
-            <select name="plan" defaultValue={account.plan}>
-              {PLANS.map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
-            </select>
-            <input type="date" name="until" defaultValue={until} title="Válido até (mensal/anual)" />
-            <button type="submit">Salvar plano</button>
-          </form>
-          <p className="muted small" style={{ margin: 0 }}>
-            Criada em {formatDate(account.created_at)} · origem: {account.source} · último login: {account.last_login_at ? formatDate(account.last_login_at) : "nunca"} · senha: {account.password_hash ? "definida" : "ainda não (primeiro acesso)"}
-          </p>
+        <div className="grid2">
+          <div className="card stack">
+            <h2 className="card-title"><Icon name="card" /> Plano</h2>
+            <dl className="kv">
+              <div><dt>Plano</dt><dd>{PLAN_LABELS[account.plan]}</dd></div>
+              <div><dt>Válido até</dt><dd>{account.plan === "lifetime" ? "Para sempre" : account.plan_until ? formatDate(account.plan_until) : "—"}</dd></div>
+            </dl>
+            <form action={changePlan} className="row">
+              {hidden}
+              <select name="plan" defaultValue={account.plan} style={{ flex: "1 1 140px", width: "auto" }}>
+                {PLANS.map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+              </select>
+              <input type="date" name="until" defaultValue={until} title="Válido até (mensal/anual)" style={{ flex: "1 1 140px", width: "auto" }} />
+              <button type="submit">Salvar</button>
+            </form>
+          </div>
+
+          <div className="card stack">
+            <h2 className="card-title"><Icon name="pc" /> Computador</h2>
+            <dl className="kv">
+              <div><dt>PC</dt><dd>{account.device ? <code>{account.device.slice(0, 16)}…</code> : "Nenhum ainda"}</dd></div>
+              <div><dt>Último login</dt><dd>{account.last_login_at ? formatDate(account.last_login_at) : "Nunca"}</dd></div>
+              <div><dt>Senha</dt><dd>{account.password_hash ? "Definida" : "Primeiro acesso pendente"}</dd></div>
+            </dl>
+            <p className="muted small">{account.device ? "A conta só entra neste PC. Libere para o cliente trocar de computador." : "O próximo login prende a conta ao computador."}</p>
+            <form action={releaseDevice}>{hidden}<button type="submit" className="ghost" disabled={!account.device}>Liberar troca de PC</button></form>
+          </div>
         </div>
 
         <div className="card stack">
-          <h2 style={{ fontSize: 16 }}>Computador</h2>
-          <p style={{ margin: 0 }}>{account.device ? <>Presa ao PC <code>{account.device}</code></> : "Nenhum PC ainda: o próximo login prende a conta."}</p>
-          <form action={releaseDevice}>{hidden}<button type="submit" disabled={!account.device}>Liberar troca de PC</button></form>
-        </div>
-
-        <div className="card stack">
-          <h2 style={{ fontSize: 16 }}>Cortes grátis deste PC: {used} de {limit} <span style={{ color: "var(--muted)", fontWeight: 400 }}>(até {FREE_CLIPS_PER_VIDEO} por vídeo ou live)</span></h2>
-          {others.length ? <p className="error small" style={{ margin: 0 }}>Este PC também usou cortes grátis com: {others.map((o) => o.email).join(", ")}</p> : null}
-          <ul className="small" style={{ margin: 0 }}>
-            {clips.map((c) => <li key={c.source_key}>{formatDate(c.created_at)} · {c.clips} {c.clips === 1 ? "corte" : "cortes"} · {c.source_key.slice(0, 80)}{c.email && c.email !== account.email ? ` · (${c.email})` : ""}</li>)}
-          </ul>
+          <div className="row spread">
+            <h2 className="card-title"><Icon name="scissors" /> Cortes grátis deste PC</h2>
+            <span className="muted small"><b style={{ color: "var(--fg)" }}>{used}</b> de {limit} usados · até {FREE_CLIPS_PER_VIDEO} por vídeo ou live</span>
+          </div>
+          <div className="meter"><i style={{ width: `${limit ? Math.min(100, (used / limit) * 100) : 0}%` }} /></div>
+          {others.length ? <p className="alert error small">Este PC também usou cortes grátis com: {others.map((o) => o.email).join(", ")}</p> : null}
+          {clips.length ? (
+            <ul className="history">
+              {clips.map((c) => (
+                <li key={c.source_key}>
+                  <span style={{ overflowWrap: "anywhere" }}>{c.source_key.slice(0, 80)}{c.email && c.email !== account.email ? <span className="muted"> · {c.email}</span> : null}</span>
+                  <span className="muted" style={{ whiteSpace: "nowrap" }}>{c.clips} {c.clips === 1 ? "corte" : "cortes"} · {formatDate(c.created_at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="muted small">Nenhum vídeo cortado no plano grátis ainda.</p>}
           {account.device ? (
             <div className="row">
               <form action={addFreeClips} className="row">
                 {hidden}<input type="hidden" name="device" value={account.device} />
-                <input type="number" name="amount" defaultValue={5} min={-50} max={50} style={{ width: 80 }} />
+                <input type="number" name="amount" defaultValue={5} min={-50} max={50} style={{ width: 90 }} aria-label="Quantidade" />
                 <button type="submit">Dar cortes extras</button>
               </form>
               <form action={resetFreeClips}>{hidden}<input type="hidden" name="device" value={account.device} /><button type="submit" className="ghost">Zerar cortes do PC</button></form>
@@ -88,26 +115,31 @@ export default async function ClientPage({ params, searchParams }: {
           ) : null}
         </div>
 
-        <div className="card stack">
-          <h2 style={{ fontSize: 16 }}>Acesso</h2>
-          <div className="row">
-            <form action={makeResetLink}>{hidden}<button type="submit">Gerar link de nova senha</button></form>
-            <form action={toggleBlock}>{hidden}<button type="submit" className="ghost">{account.status === "blocked" ? "Desbloquear" : "Bloquear conta"}</button></form>
+        <div className="grid2">
+          <div className="card stack">
+            <h2 className="card-title"><Icon name="lock" /> Acesso</h2>
+            <p className="muted small">O link deixa o cliente criar uma senha nova, sem precisar de e-mail. Bloquear tira a IA da conta na hora.</p>
+            <div className="row">
+              <form action={makeResetLink}>{hidden}<button type="submit" className="ghost">Gerar link de nova senha</button></form>
+              <form action={toggleBlock}>{hidden}<button type="submit" className={account.status === "blocked" ? "ghost" : "danger"}>{account.status === "blocked" ? "Desbloquear" : "Bloquear conta"}</button></form>
+            </div>
           </div>
-        </div>
 
-        <form action={saveNotes} className="card stack">
-          {hidden}
-          <h2 style={{ fontSize: 16 }}>Anotações</h2>
-          <textarea name="notes" defaultValue={account.notes} rows={3} />
-          <button type="submit" style={{ alignSelf: "flex-start" }}>Salvar</button>
-        </form>
+          <form action={saveNotes} className="card stack">
+            {hidden}
+            <h2 className="card-title"><Icon name="note" /> Anotações</h2>
+            <textarea name="notes" defaultValue={account.notes} rows={3} placeholder="Só você vê." />
+            <button type="submit" className="ghost" style={{ justifySelf: "start" }}>Salvar anotações</button>
+          </form>
+        </div>
 
         {payments.length ? (
           <div className="card stack">
-            <h2 style={{ fontSize: 16 }}>Pagamentos</h2>
-            <ul className="small" style={{ margin: 0 }}>
-              {payments.map((p, i) => <li key={i}>{formatDate(p.created_at)} · {p.event} · {p.result}</li>)}
+            <h2 className="card-title"><Icon name="receipt" /> Pagamentos</h2>
+            <ul className="history">
+              {payments.map((p, i) => (
+                <li key={i}><span><code>{p.event}</code> {p.result}</span><span className="muted" style={{ whiteSpace: "nowrap" }}>{formatDate(p.created_at)}</span></li>
+              ))}
             </ul>
           </div>
         ) : null}

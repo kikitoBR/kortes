@@ -185,8 +185,8 @@
 .lp-plans { margin-top: 44px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: stretch; }
 .lp-plan { position: relative; padding: 28px 24px; display: flex; flex-direction: column; gap: 6px; }
 .lp-plan h3 { margin: 0; font-size: 20px; }
-.lp-plan-price { margin: 8px 0 0; display: flex; align-items: baseline; gap: 4px; }
-.lp-plan-price b { font-family: var(--font-syne); font-size: 40px; letter-spacing: -0.03em; }
+.lp-plan-price { margin: 8px 0 0; display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+.lp-plan-price b { font-family: var(--font-syne); font-size: clamp(30px, 2.6vw, 40px); letter-spacing: -0.03em; white-space: nowrap; }
 .lp-plan-price span { color: var(--muted); font-weight: 600; }
 .lp-plan-note { margin: 0; font-size: 14px; color: var(--muted); min-height: 2.6em; }
 .lp-plan ul { list-style: none; padding: 0; margin: 14px 0 22px; display: grid; gap: 9px; font-size: 15px; }
@@ -256,7 +256,7 @@
 .lp-faq details p { margin: 0; padding: 0 26px 24px; color: #57534e; }
 
 .lp-final { text-align: center; display: flex; flex-direction: column; align-items: center; padding-bottom: 120px; }
-.lp-final svg { color: var(--ink); margin-bottom: 18px; }
+.lp-final .lp-final-mark { color: var(--ink); margin-bottom: 18px; }
 .lp-final .lp-h2 { max-width: 14ch; }
 .lp-final .lp-cta-row { justify-content: center; }
 

@@ -16,7 +16,7 @@ export default async function Conversa({ params }: { params: Promise<{ id: strin
 
   return (
     <Shell active="mensagens">
-      <p className="small" style={{ margin: "0 0 12px" }}><Link href="/painel" className="muted">← Mensagens</Link></p>
+      <Link href="/painel" className="back">← Mensagens</Link>
       <div className="layout2">
         <section className="stack">
           <div className="row spread">

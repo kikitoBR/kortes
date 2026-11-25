@@ -7,6 +7,7 @@ import { HeroCut } from "./hero-cut";
 import { Pricing } from "./pricing";
 import { latestRelease } from "./release";
 import "./landing.css";
+import { Scissors } from "./brand";
 
 
 const TITLE = "Kortes · Corte a live enquanto ela acontece";
@@ -22,21 +23,6 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
 };
 
-function Scissors({ size = 28 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 200 200" aria-hidden>
-      <g stroke="#9D9FA2" strokeWidth="16.6" fill="none">
-        <circle cx="44.3" cy="61.1" r="25" />
-        <line x1="44.3" y1="86.1" x2="103.5" y2="86.1" />
-        <line x1="150" y1="86.1" x2="180.7" y2="86.1" strokeLinecap="round" />
-      </g>
-      <g stroke="currentColor" strokeWidth="16.6" fill="none">
-        <circle cx="77.7" cy="147.3" r="25" />
-        <line x1="60.02" y1="129.62" x2="156.34" y2="33.3" strokeLinecap="round" />
-      </g>
-    </svg>
-  );
-}
 
 // Small line icons (24px, stroke = currentColor).
 const ICONS: Record<string, React.ReactNode> = {
@@ -226,7 +212,7 @@ export default async function Home() {
       </section>
 
       <section id="baixar" className="lp-section lp-final">
-        <Scissors size={72} />
+        <Scissors size={72} className="lp-final-mark" />
         <h2 className="lp-h2">Corte a live <span>enquanto ela acontece.</span></h2>
         <DownloadButton href={release.url} meta={`${meta} · a licença é ativada no primeiro uso`} />
       </section>

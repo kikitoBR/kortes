@@ -599,9 +599,11 @@ export default function HomeApp() {
                   collisionPadding={12}
                   className="max-h-[var(--radix-popover-content-available-height)] w-[min(92vw,420px)] overflow-y-auto overscroll-contain rounded-2xl p-3"
                 >
-                  {/* With a webcam layout, where the webcam is matters most: keep it on top, not below the fold. */}
+                  {/* With a webcam layout, where the webcam is matters most: pinned on top of the
+                      list, so it stays in view however far the layouts are scrolled. */}
                   {WEBCAM_LAYOUTS.includes(outputFormat) ? (
-                    <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-brand/30 bg-brand-soft/60 p-3">
+                    <div className="sticky -top-3 z-10 -mx-3 -mt-3 mb-3 bg-popover px-3 pb-2 pt-3 shadow-[0_8px_12px_-10px_rgb(0_0_0/0.25)]">
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-brand/30 bg-brand-soft/60 p-3">
                       <div className="flex min-w-0 items-center gap-2.5">
                         <ScanFace className="size-5 shrink-0 text-brand" />
                         <div className="min-w-0">
@@ -621,6 +623,7 @@ export default function HomeApp() {
                           {webcamRegion ? "Ajustar" : "Marcar webcam"}
                         </Button>
                       </div>
+                    </div>
                     </div>
                   ) : null}
                   <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Enquadramento</p>

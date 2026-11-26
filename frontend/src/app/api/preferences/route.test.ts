@@ -54,6 +54,7 @@ describe("/api/preferences", () => {
         clipDuration: "auto",
         outputFormat: "vertical",
         titleOverlay: true,
+        titleStyle: { preset: "duas_cores", position: "auto", color: "#E11D2E", size: "m", duration: "start" },
         hookIntro: false,
         exportDir: null,
         notifyDesktop: true,

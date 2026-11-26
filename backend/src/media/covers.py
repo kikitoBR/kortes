@@ -18,8 +18,6 @@ from .common import FONTS_DIR, logger
 from .face_detection import open_yunet_detector
 from .ffmpeg import ffmpeg_escape_filter_path, ffprobe_duration, ffprobe_video_size, run_ffmpeg_command
 
-COVER_FONT = "Anton-Regular.ttf"
-COVER_BAND_COLOR = "0xEB1D20"
 COVER_MAX_TEXT = 60
 # The AI hook title is burned into the first ~4 s; covers skip that stretch so
 # the frame never carries a second, smaller copy of the text.
@@ -96,11 +94,48 @@ def pick_cover_time(clip_path: Path, duration: Optional[float] = None) -> float:
     return round(best_time, 2)
 
 
+# Fonts offered for the cover text (id -> file in backend/fonts).
+COVER_FONTS = {
+    "anton": "Anton-Regular.ttf",
+    "bebas": "BebasNeue-Regular.ttf",
+    "poppins": "Poppins-ExtraBold.ttf",
+    "archivo": "ArchivoBlack-Regular.ttf",
+    "bangers": "Bangers-Regular.ttf",
+}  # (THEBOLDFONT has no accented letters: "NÃO" would lose its Ã)
+# Picture treatment: punchy colour + vignette, untouched, or darker so text pops.
+COVER_LOOKS = {
+    "vivo": ["eq=saturation=1.2:contrast=1.08", "vignette=PI/4"],
+    "natural": [],
+    "escuro": ["eq=saturation=1.1:contrast=1.05:brightness=-0.08", "vignette=PI/3"],
+}
+# Narrow fonts fit more letters per line.
+_CHAR_WIDTH = {"anton": 0.46, "bebas": 0.4, "poppins": 0.62, "archivo": 0.66, "bangers": 0.5}
+
+
+def _hex(color: str, alpha: float = 1.0) -> str:
+    return f"0x{color.lstrip('#')}@{alpha:g}"
+
+
 def render_clip_cover(
-    clip_path: Path, output_path: Path, text: str, at: Optional[float] = None
+    clip_path: Path,
+    output_path: Path,
+    text: str,
+    at: Optional[float] = None,
+    style: Optional[dict] = None,
+    font: Optional[str] = None,
+    look: Optional[str] = None,
 ) -> float:
-    """Write the cover JPEG and return the clip second it was taken from."""
-    font_path = FONTS_DIR / COVER_FONT
+    """Write the cover JPEG and return the clip second it was taken from.
+
+    ``style`` is the same band/position/colour/size as the clip title
+    (`media/title_styles.py`); ``font`` one of COVER_FONTS; ``look`` one of COVER_LOOKS.
+    """
+    from .captions import split_title_lines
+    from .title_styles import POSITIONS, SIZES, normalize_title_style
+
+    style = normalize_title_style(style)
+    font_id = font if font in COVER_FONTS else "anton"
+    font_path = FONTS_DIR / COVER_FONTS[font_id]
     if not font_path.exists():
         raise RuntimeError(f"Fonte da capa ausente: {font_path}")
     width, height = ffprobe_video_size(clip_path)
@@ -111,36 +146,56 @@ def render_clip_cover(
         at = pick_cover_time(clip_path, duration)
     at = min(max(0.0, float(at)), max(0.0, duration - 0.1))
 
-    lines = balance_cover_lines(text)
+    preset = style["preset"]
+    boxed = preset in {"faixa", "duas_cores", "faixa_cor"}
+    words = " ".join(text.split()).upper()[:COVER_MAX_TEXT].split()
     with tempfile.TemporaryDirectory(prefix="kortes_cover_") as work:
         filters = [
             f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase",
             f"crop={out_w}:{out_h}",
-            "eq=saturation=1.2:contrast=1.08",
-            "vignette=PI/4",
+            *COVER_LOOKS.get(look or "vivo", COVER_LOOKS["vivo"]),
         ]
-        if lines:
+        if words:
+            scale = SIZES[style["size"]]
+            char_w = _CHAR_WIDTH[font_id]
+            usable = out_w * 0.88
+            target = (0.11 if portrait else 0.085) * out_w * scale
+            lines = split_title_lines(words, max(6, int(usable / (target * char_w))))
             longest = max(len(line) for line in lines)
-            size = round(min(120 if portrait else 112, (out_w * 0.9) / (max(longest, 1) * 0.5)))
-            font = ffmpeg_escape_filter_path(font_path)
-            # Portrait: near the gameplay/webcam divide (~40%), above burned
-            # captions (~75%) and far from the platform's bottom bar.
-            band_y = "h*0.42" if portrait else "h-160"
-            top_y = f"h*0.42-{round(size * 1.35)}" if portrait else "h-300"
-            files = []
+            size = round(max(out_w * 0.05, min(usable / (longest * char_w), out_w * (0.15 if portrait else 0.1) * scale)))
+            pad = max(10, size // 5)
+            step = size * 1.08 + (pad * 2 + 6 if boxed else size * 0.12)
+            if style["position"] in POSITIONS:
+                center = POSITIONS[style["position"]]
+            else:
+                # Portrait: near the gameplay/webcam divide (~42%), above burned
+                # captions and far from the platform's bottom bar.
+                center = 0.42 if portrait else 0.78
+            block = step * len(lines)
+            middle = min(max(center * out_h, 0.05 * out_h + block / 2), 0.95 * out_h - block / 2)
+            first = middle - step * (len(lines) - 1) / 2
+            font_arg = ffmpeg_escape_filter_path(font_path)
             for index, line in enumerate(lines):
+                last = index == len(lines) - 1
                 path = Path(work) / f"line{index}.txt"
                 path.write_text(line, encoding="utf-8")
-                files.append(ffmpeg_escape_filter_path(path))
-            if len(files) == 2:
-                filters.append(
-                    f"drawtext=fontfile={font}:textfile={files[0]}:fontsize={size}:fontcolor=white:"
-                    f"borderw=7:bordercolor=black:x=(w-text_w)/2:y={top_y}"
-                )
-            filters.append(
-                f"drawtext=fontfile={font}:textfile={files[-1]}:fontsize={size}:fontcolor=white:"
-                f"box=1:boxcolor={COVER_BAND_COLOR}:boxborderw=16:x=(w-text_w)/2:y={band_y}"
-            )
+                y = round(first + index * step)
+                parts = [
+                    f"fontfile={font_arg}", f"textfile={ffmpeg_escape_filter_path(path)}", f"fontsize={size}",
+                    "x=(w-text_w)/2", f"y={y}-text_h/2",
+                ]
+                if preset == "faixa":
+                    parts += ["fontcolor=white", "box=1", f"boxcolor={_hex('#000000', 0.78)}", f"boxborderw={pad}"]
+                elif preset == "faixa_cor":
+                    parts += ["fontcolor=white", "box=1", f"boxcolor={_hex(style['color'])}", f"boxborderw={pad}"]
+                elif preset == "duas_cores":
+                    band = style["color"] if last else "#FFFFFF"
+                    parts += ["fontcolor=white" if last else "fontcolor=black", "box=1", f"boxcolor={_hex(band)}", f"boxborderw={pad}"]
+                elif preset == "destaque":
+                    parts += [f"fontcolor={_hex(style['color'])}", f"borderw={max(4, size // 9)}", "bordercolor=black"]
+                else:
+                    parts += ["fontcolor=white", f"borderw={max(4, size // 12)}", "bordercolor=black"]
+                filters.append("drawtext=" + ":".join(parts))
         command = [
             "ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", str(clip_path),
             "-frames:v", "1", "-vf", ",".join(filters), "-q:v", "2", str(output_path),

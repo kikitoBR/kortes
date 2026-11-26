@@ -298,9 +298,6 @@ async def settle_task_free_cuts(task_id: str, clips: Optional[int] = None) -> No
             if clips is None:
                 task = await TaskRepository.get_task_by_id(db, task_id)
                 clips = len((task or {}).get("generated_clips_ids") or [])
-        reserved = (metadata or {}).get("free_clips")
-        if isinstance(reserved, int) and clips >= reserved:
-            return
         token = account_token()
         if token:
             await site_request(

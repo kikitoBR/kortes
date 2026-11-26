@@ -1,5 +1,6 @@
 """Captions helpers for the video pipeline."""
 
+from itertools import combinations
 from typing import Any
 from typing import Dict
 from ..font_registry import FONTS_DIR
@@ -269,6 +270,26 @@ def _balance_title_lines(words: List[str], max_chars: int) -> List[str]:
     return best_lines
 
 
+def split_title_lines(words: List[str], max_chars: int, max_lines: int = 3) -> List[str]:
+    """The fewest lines (up to ``max_lines``) whose longest fits ``max_chars``,
+    split where the lines come out most even; the most even 3-line split otherwise."""
+    if not words:
+        return [""]
+    best: List[str] = [" ".join(words)]
+    for count in range(1, min(max_lines, len(words)) + 1):
+        best_longest = None
+        for cuts in combinations(range(1, len(words)), count - 1):
+            bounds = (0, *cuts, len(words))
+            lines = [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+            longest = max(len(line) for line in lines)
+            if best_longest is None or longest < best_longest:
+                best_longest, candidate = longest, lines
+        best = candidate
+        if best_longest <= max_chars:
+            break
+    return best
+
+
 def build_hook_title_ass(
     hook_title: str,
     template: Dict[str, Any],
@@ -278,81 +299,116 @@ def build_hook_title_ass(
     font_name: str,
     caption_font_px: int,
     coverage: Optional[CaptionFontCoverage] = None,
+    style: Optional[Dict[str, Any]] = None,
+    output_format: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
-    """Build the (style_line, dialogue_events) for a burned-in hook title.
+    """Build the (style_lines, dialogue_events) for a burned-in hook title.
 
-    The title sits in the top safe area (Alignment 8), styled off the caption
-    template so it reads as part of the same design system: same font, an
-    outline/backing for contrast, power words and numbers in the template's
-    highlight colour, and a quick fade+pop entrance.
+    ``style`` (`media/title_styles.py`) picks the band behind the text, where the
+    block sits, its accent colour, size and whether it stays the whole clip. Every
+    line is its own event placed with \\pos, so each can have its own band colour.
+    Same font as the captions, power words and numbers in the accent colour on the
+    outlined styles, and a quick fade+pop entrance.
     """
-    uppercase = bool(template.get("uppercase"))
+    from .title_styles import SIZES, normalize_title_style, title_center
+
+    style = normalize_title_style(style)
+    preset = style["preset"]
+    boxed = preset in {"faixa", "duas_cores", "faixa_cor"}
+    uppercase = boxed or bool(template.get("uppercase"))
     title_text = hook_title.upper() if uppercase else hook_title
     if coverage:
         title_text = coverage.prepare(title_text)
 
-    primary = hex_to_ass_color(template.get("font_color"), "#FFFFFF")
-    highlight = hex_to_ass_color(
-        template.get("emphasis_color") or template.get("highlight_color"), "#FFE000"
-    )
-    outline = hex_to_ass_color(template.get("stroke_color") or "#000000", "#000000")
-    back_color = hex_to_ass_color(template.get("background_color"), "#00000080")
+    accent = hex_to_ass_color(style["color"], "#E11D2E")
+    white = hex_to_ass_color("#FFFFFF")
+    black = hex_to_ass_color("#000000")
+    template_primary = hex_to_ass_color(template.get("font_color"), "#FFFFFF")
 
-    # Slightly smaller than the captions so the spoken words stay the hero.
-    base_px = max(34, min(66, int(caption_font_px * 0.82)))
-    usable_width = video_width - 2 * max(48, int(video_width * HOOK_TITLE_TOP_MARGIN_FRAC))
-    max_chars = max(10, int(usable_width / (base_px * 0.52)))
-    lines = _balance_title_lines(title_text.split(), max_chars)
+    # Lines are balanced for a big headline, then the font grows until the longest
+    # line fills ~82% of the width (bounded, and scaled by the chosen size).
+    scale = SIZES[style["size"]]
+    side = max(48, int(video_width * HOOK_TITLE_TOP_MARGIN_FRAC))
+    usable_width = video_width - 2 * side
+    char_w = 0.6 if uppercase else 0.54
+    target_px = video_width * 0.068 * scale
+    max_chars = max(10, int(usable_width / (target_px * char_w)))
+    lines = split_title_lines(title_text.split(), max_chars)
     longest = max(len(line) for line in lines)
-    hook_px = base_px
-    if longest > max_chars:
-        hook_px = max(30, min(base_px, int(usable_width / (longest * 0.52))))
+    fill_px = usable_width * 0.92 / (max(longest, 1) * char_w)
+    hook_px = int(max(video_width * 0.04, min(fill_px, video_width * 0.085 * scale)))
 
-    base_stroke = int(template.get("stroke_width", 3) or 0)
-    has_outline = template.get("stroke_color") is not None and base_stroke > 0
-    border_style = 3 if (not has_outline and template.get("background_color")) else 1
-    outline_px = (
-        max(base_stroke, round(hook_px * base_stroke / 26)) if has_outline else 0
-    )
-    if border_style == 3:
-        outline_px = max(4, hook_px // 6)  # backing-box padding
-    elif outline_px == 0:
-        outline_px = max(2, hook_px // 16)  # always keep contrast on video
-    shadow_px = max(2, hook_px // 20) if template.get("shadow") else 0
-    margin_v = max(48, int(video_height * HOOK_TITLE_TOP_MARGIN_FRAC))
+    pad = max(8, hook_px // 4)  # band padding around the text
+    if boxed:
+        step = hook_px * 1.12 + pad * 1.7
+        outline_px = pad
+    else:
+        step = hook_px * 1.14
+        outline_px = max(3, round(hook_px / (7 if preset == "destaque" else 11)))
+    shadow_px = 0 if boxed else max(2, hook_px // 20)
 
-    style_line = (
-        f"Style: Hook,{font_name},{hook_px},{primary},&H000000FF,{outline},{back_color},"
-        f"1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},8,60,60,{margin_v},1"
-    )
+    block = step * len(lines)
+    center = title_center(style, output_format) * video_height
+    lowest, highest = 0.05 * video_height + block / 2, 0.95 * video_height - block / 2
+    center = min(max(center, lowest), max(lowest, highest))
+    first_y = center - step * (len(lines) - 1) / 2
 
-    # Accent power words / numbers in the template highlight colour.
-    rendered_lines: List[str] = []
-    for line in lines:
-        spans: List[str] = []
-        for word in line.split():
-            token = normalize_token(word)
-            accented = bool(token) and (token in POWER_WORDS or any(c.isdigit() for c in token))
-            color = highlight if accented else primary
-            disp = escape_ass_text(word)
-            if coverage:
-                disp = coverage.render(disp, hook_px)
-            spans.append(f"{{\\c{color}}}{disp}")
-        rendered_lines.append(" ".join(spans))
-    text = "\\N".join(rendered_lines)
+    style_lines = [
+        f"Style: Hook,{font_name},{hook_px},{white},&H000000FF,{black},&H80000000,"
+        f"1,0,0,0,100,100,0,0,1,{outline_px},{shadow_px},5,0,0,0,1",
+        f"Style: HookBox,{font_name},{hook_px},{white},&H000000FF,{accent},&H00000000,"
+        f"1,0,0,0,100,100,0,0,3,{pad},0,5,0,0,0,1",
+    ]
+
+    def line_colors(index: int) -> Tuple[str, str, str]:
+        """(style, text colour, band colour) of one line."""
+        last = index == len(lines) - 1
+        if preset == "faixa":
+            return "HookBox", white, black
+        if preset == "faixa_cor":
+            return "HookBox", white, accent
+        if preset == "duas_cores":
+            return ("HookBox", white, accent) if last else ("HookBox", black, white)
+        if preset == "destaque":
+            return "Hook", accent, black
+        return "Hook", template_primary, black
 
     start = 0.12
     end = min(HOOK_TITLE_SECONDS, max(HOOK_TITLE_MIN_SECONDS, output_duration - 0.25))
+    if style["duration"] == "always":
+        end = max(start + 0.5, output_duration - 0.05)
     if output_duration <= HOOK_TITLE_MIN_SECONDS:
         start, end = 0.0, max(0.5, output_duration)
-    entrance = "\\fad(160,240)"
-    if template.get("word_pop", True):
-        entrance += "\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)"
-    events = [
-        f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
-        f"{{{entrance}}}{text}"
-    ]
-    return style_line, events
+    pop = r"\fscx90\fscy90\t(0,160,\fscx100\fscy100)" if template.get("word_pop", True) else ""
+
+    events: List[str] = []
+    for index, line in enumerate(lines):
+        style_name, text_color, band_color = line_colors(index)
+        spans: List[str] = []
+        for word in line.split():
+            disp = escape_ass_text(word)
+            if coverage:
+                disp = coverage.render(disp, hook_px)
+            if preset == "classico":
+                token = normalize_token(word)
+                accented = bool(token) and (token in POWER_WORDS or any(c.isdigit() for c in token))
+                spans.append(f"{{\\c{accent if accented else text_color}}}{disp}")
+            else:
+                spans.append(disp)
+        y = first_y + index * step
+        # Lines enter one after another (80 ms apart).
+        delay = index * 80
+        # The dark band of "faixa" lets a little of the video through.
+        band_alpha = r"\3a&H38&" if preset == "faixa" else ""
+        tags = (
+            f"\\an5\\pos({video_width // 2},{round(y)})\\c{text_color}\\3c{band_color}{band_alpha}"
+            f"\\fad({160 + delay},240){pop}"
+        )
+        events.append(
+            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},{style_name},,0,0,0,,"
+            f"{{{tags}}}{' '.join(spans)}"
+        )
+    return "\n".join(style_lines), events
 
 
 def build_assemblyai_ass_subtitles(
@@ -373,6 +429,8 @@ def build_assemblyai_ass_subtitles(
     caption_words: Optional[List[Dict[str, Any]]] = None,
     position_y_override: Optional[float] = None,
     highlight_words: Optional[List[str]] = None,
+    title_style: Optional[Dict[str, Any]] = None,
+    output_format: Optional[str] = None,
 ) -> bool:
     """Generate animated word-synced ASS subtitles from cached AssemblyAI words.
 
@@ -473,6 +531,8 @@ def build_assemblyai_ass_subtitles(
             font_name,
             font_px,
             coverage,
+            style=title_style,
+            output_format=output_format,
         )
         hook_style_block = f"{hook_style_line}\n"
 

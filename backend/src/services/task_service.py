@@ -485,6 +485,7 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
             clip_count = source_settings.get("clip_count")
             strictness = source_settings.get("strictness") or "balanced"
             title_overlay = source_settings.get("title_overlay", True)
+            title_style = source_settings.get("title_style")
             cache_key = self._build_cache_key(
                 url, source_type, processing_mode,
                 clip_duration=clip_duration, clip_count=clip_count, strictness=strictness,
@@ -669,6 +670,7 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
                         "webcam_region": webcam_region,
                         "hook_intro": hook_intro,
                         "title_overlay": title_overlay,
+                        "title_style": title_style,
                     },
                     stage_timings=stage_timings,
                     show=show_reporter,
@@ -760,6 +762,7 @@ class TaskService(QueuedClipRenderMixin, ClipEditingMixin):
                     show=show,
                     watermark=free_plan,
                     title_overlay=title_overlay,
+                    title_style=title_style,
                 )
                 pending_clip_path = Path(clip_info["path"]) if clip_info else None
                 await check_cancelled()

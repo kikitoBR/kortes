@@ -117,6 +117,7 @@ class ProductionLiveHooks:
             timing, segment, index, output_dir, *render_options,
             webcam_region=webcam_region, hook_intro=self.options.hook_intro, clip_source=clip_source,
             show=self.show, watermark=self.options.watermark, title_overlay=self.options.title_overlay,
+            title_style=self.options.title_style,
         )
         add_review_note(info, note)
         return info

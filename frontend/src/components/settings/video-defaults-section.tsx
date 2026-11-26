@@ -11,6 +11,7 @@ import { desktopBridge } from "@/lib/desktop-bridge";
 import { isDesktop } from "@/lib/edition";
 import { cn } from "@/lib/utils";
 import { CLIP_COUNTS, DURATIONS, FRAMINGS, STRICTNESS, type VideoDefaults } from "@/lib/video-defaults";
+import { TitleStylePicker } from "@/components/title-style-picker";
 
 type Props = {
   value: VideoDefaults;
@@ -144,6 +145,16 @@ export function VideoDefaultsSection({ value, onChange, disabled }: Props) {
         onChange={(next) => set("titleOverlay", next)}
         disabled={disabled}
       />
+      {value.titleOverlay ? (
+        <div className="rounded-xl border bg-muted/30 p-4">
+          <TitleStylePicker
+            value={value.titleStyle}
+            onChange={(next) => set("titleStyle", next)}
+            outputFormat={value.outputFormat}
+            disabled={disabled}
+          />
+        </div>
+      ) : null}
       <Toggle
         id="hook-intro"
         title="Ganho inicial"

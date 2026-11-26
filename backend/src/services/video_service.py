@@ -329,6 +329,7 @@ class VideoService:
         show: Optional["ShowReporter"] = None,
         watermark: bool = False,
         title_overlay: bool = True,
+        title_style: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure.
 
@@ -446,6 +447,7 @@ class VideoService:
                 show_hook=show.clip_threadsafe if show is not None else None,
                 show_dir=show.clip_dir if show is not None else None,
                 show_url=show.asset_url if show is not None else None,
+                title_style=title_style,
             )
 
             if not success:

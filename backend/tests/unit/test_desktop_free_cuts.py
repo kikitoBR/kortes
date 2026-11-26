@@ -55,12 +55,13 @@ async def test_a_short_video_gives_its_unused_free_cuts_back(desktop_config, mon
 
 
 @pytest.mark.asyncio
-async def test_a_video_that_used_all_its_cuts_or_is_paid_says_nothing(desktop_config, monkeypatch):
+async def test_every_free_video_reports_its_real_count_and_paid_ones_nothing(desktop_config, monkeypatch):
+    # A resumed video can make more than its first run kept: the site gets the real count.
     calls = _fake_task(monkeypatch, {"free_source": "yt:abc", "free_clips": 5}, ["c"] * 5)
     await desktop.settle_task_free_cuts("task-1")
     calls_paid = _fake_task(monkeypatch, {}, [])
     await desktop.settle_task_free_cuts("task-2")
-    assert calls == [] and calls_paid == []
+    assert calls == [("/clips/settle", {"source": "yt:abc", "clips": 5}, "ks_test")] and calls_paid == []
 
 
 @pytest.mark.asyncio

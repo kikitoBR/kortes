@@ -2,6 +2,8 @@
 // (users.video_defaults); the home page starts from it and the backend fills in
 // whatever a request leaves out (API keys, MCP).
 
+import { DEFAULT_TITLE_STYLE, normalizeTitleStyle, TITLE_COLORS, type TitleStyle } from "./title-style";
+
 export type OutputFormat =
   | "vertical"
   | "vertical_pan"
@@ -57,6 +59,8 @@ export type VideoDefaults = {
   outputFormat: OutputFormat;
   /** The AI's hook title burned at the top for the first seconds. */
   titleOverlay: boolean;
+  /** How that title looks: band, position, colour, size, duration. */
+  titleStyle: TitleStyle;
   /** "Ganho inicial": the clip opens with its strongest line. */
   hookIntro: boolean;
   /** Kortes Desktop: a copy of every cut goes to this folder (null: off). */
@@ -71,6 +75,7 @@ export const VIDEO_DEFAULTS: VideoDefaults = {
   clipDuration: "auto",
   outputFormat: "vertical",
   titleOverlay: true,
+  titleStyle: DEFAULT_TITLE_STYLE,
   hookIntro: false,
   exportDir: null,
   notifyDesktop: true,
@@ -87,6 +92,7 @@ export function normalizeVideoDefaults(value: unknown): VideoDefaults {
     clipDuration: pick<ClipDuration>("clipDuration", (v): v is ClipDuration => DURATIONS.some((d) => d.id === v)),
     outputFormat: pick<OutputFormat>("outputFormat", (v): v is OutputFormat => FRAMINGS.some((f) => f.id === v)),
     titleOverlay: pick<boolean>("titleOverlay", (v): v is boolean => typeof v === "boolean"),
+    titleStyle: normalizeTitleStyle(raw.titleStyle),
     hookIntro: pick<boolean>("hookIntro", (v): v is boolean => typeof v === "boolean"),
     exportDir: pick<string | null>(
       "exportDir",
@@ -99,5 +105,21 @@ export function normalizeVideoDefaults(value: unknown): VideoDefaults {
 /** Which keys of a PATCH body are invalid (to answer 400 instead of silently ignoring them). */
 export function invalidVideoDefaultKeys(value: Record<string, unknown>): string[] {
   const normalized = normalizeVideoDefaults(value) as Record<string, unknown>;
-  return Object.keys(value).filter((key) => key in VIDEO_DEFAULTS && normalized[key] !== value[key]);
+  return Object.keys(value).filter((key) => {
+    if (!(key in VIDEO_DEFAULTS)) return false;
+    if (key === "titleStyle") return !validTitleStyle(value[key]);
+    return normalized[key] !== value[key];
+  });
 }
+
+/** Every key given is a valid choice (missing keys take the default). */
+function validTitleStyle(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const given = value as Record<string, unknown>;
+  const normalized = normalizeTitleStyle(given) as Record<string, unknown>;
+  return Object.keys(given).every(
+    (key) => key in normalized && (key === "color" ? String(given.color).toUpperCase() === normalized.color : normalized[key] === given[key]),
+  );
+}
+
+export { TITLE_COLORS };

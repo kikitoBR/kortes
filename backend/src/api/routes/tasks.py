@@ -32,6 +32,7 @@ from ...services.task_service import TaskService
 from ...services.billing_service import BillingService, BillingLimitExceeded
 from ...auth_headers import resolve_authenticated_user_id
 from ...ai import normalize_clip_count
+from ...media.title_styles import normalize_title_style
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import get_config
@@ -317,6 +318,7 @@ def _merge_task_source_metadata(
     clip_count: Any = None,
     strictness: Any = None,
     title_overlay: Any = None,
+    title_style: Any = None,
 ) -> Dict[str, Any]:
     merged = dict(existing or {})
 
@@ -342,6 +344,8 @@ def _merge_task_source_metadata(
         merged["strictness"] = strictness
     if title_overlay is False:
         merged["title_overlay"] = False
+    if isinstance(title_style, dict):
+        merged["title_style"] = normalize_title_style(title_style)
 
     return merged
 
@@ -482,6 +486,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         ("clip_count", "clipCount"),
         ("strictness", "strictness"),
         ("title_overlay", "titleOverlay"),
+        ("title_style", "titleStyle"),
     ):
         if key not in data and saved in defaults:
             data[key] = defaults[saved]
@@ -516,6 +521,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     strictness = data.get("strictness") if data.get("strictness") in STRICTNESS_LEVELS else "balanced"
     # The AI's hook title at the top of the first seconds.
     title_overlay = data.get("title_overlay") is not False
+    # How the title looks: band, position, colour, size, duration.
+    title_style = normalize_title_style(data.get("title_style")) if isinstance(data.get("title_style"), dict) else None
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="O link de origem é obrigatório")
 
@@ -606,6 +613,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 # "Exigência da IA": the minimum score (1-10) a live moment needs.
                 **({"min_score": LIVE_MIN_SCORES[strictness]} if strictness in LIVE_MIN_SCORES else {}),
                 **({} if title_overlay else {"title_overlay": False}),
+                **({"title_style": title_style} if title_style else {}),
                 "max_seconds": int(billing["max_youtube_duration_seconds"]),
                 **({"max_clips": free_clips, "watermark": True} if free_claim else {}),
             }
@@ -627,6 +635,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                         clip_count=clip_count,
                         strictness=strictness,
                         title_overlay=title_overlay,
+                        title_style=title_style,
                     )
                     | ({"watermark": True, "free_source": free_claim, "free_clips": free_clips} if free_claim else {})
                     | (
@@ -1554,9 +1563,19 @@ async def get_clip_cover(
     request: Request,
     text: Optional[str] = None,
     t: Optional[float] = None,
+    preset: Optional[str] = None,
+    position: Optional[str] = None,
+    color: Optional[str] = None,
+    size: Optional[str] = None,
+    font: Optional[str] = None,
+    look: Optional[str] = None,
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    """JPEG cover: a frame of the clip with the cover text (Instagram, TikTok, YouTube)."""
+    """JPEG cover: a frame of the clip with the cover text (Instagram, TikTok, YouTube).
+
+    ``preset``/``position``/``color``/``size`` style the text like the clip title;
+    ``font`` and ``look`` pick the font and the picture treatment (media/covers.py).
+    """
     clip = await _load_readable_clip(request, db, task_id, clip_id)
     await db.close()
     cover_text = _default_cover_text(clip) if text is None else text[:COVER_MAX_TEXT]
@@ -1567,7 +1586,8 @@ async def get_clip_cover(
         covers_dir = Path(get_config().temp_dir) / "covers"
         covers_dir.mkdir(parents=True, exist_ok=True)
         output_path = covers_dir / f"{clip_id}_{secrets.token_hex(6)}.jpg"
-        await run_in_thread(render_clip_cover, Path(local_path), output_path, cover_text, t)
+        style = normalize_title_style({"preset": preset, "position": position, "color": color, "size": size})
+        await run_in_thread(render_clip_cover, Path(local_path), output_path, cover_text, t, style, font, look)
     except Exception as e:
         logger.error(f"Error rendering cover: {e}")
         raise HTTPException(status_code=500, detail="Não foi possível gerar a capa")
@@ -1749,6 +1769,23 @@ async def resume_task(
 
             if not source_url or not source_type:
                 raise HTTPException(status_code=400, detail="O link de origem da tarefa está ausente")
+
+            # Kortes Desktop free plan: a cancelled video gave its unused cuts back,
+            # so going on reserves again (the same video already counted passes).
+            if get_config().desktop and metadata.get("free_source"):
+                from ...desktop import SetupError, claim_free_clip
+
+                try:
+                    claim = await claim_free_clip(get_config().kortes_site_url, source_url, source_type)
+                    if not claim["pro"]:
+                        metadata["free_clips"] = claim["clips"]
+                        metadata["free_source"] = claim["source"]
+                except SetupError as exc:
+                    if exc.code != "same_source":
+                        raise HTTPException(
+                            status_code=exc.status if exc.status in (401, 402, 403) else 400, detail=exc.message
+                        )
+                await _save_task_source_metadata(task_id, metadata, db=db)
 
             async with generation_allowance_guard(
                 db, task["user_id"], enabled=get_config().monetization_enabled

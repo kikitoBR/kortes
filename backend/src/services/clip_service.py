@@ -168,6 +168,7 @@ class ClipEditingMixin:
                     clip_source=clip_source,
                     watermark=bool(metadata.get("watermark")),
                     title_overlay=metadata.get("title_overlay") is not False,
+                    title_style=metadata.get("title_style") if isinstance(metadata.get("title_style"), dict) else None,
                 )
                 if not info:
                     failed += 1
@@ -545,6 +546,7 @@ class ClipEditingMixin:
                 clip_source=clip_source,
                 watermark=bool(settings.get("watermark")),
                 title_overlay=settings.get("title_overlay") is not False,
+                title_style=settings.get("title_style"),
             )
         finally:
             await run_in_thread(clip_source.close)
@@ -686,6 +688,7 @@ class ClipEditingMixin:
             "clip_count": normalize_clip_count(parsed.get("clip_count")),
             "strictness": parsed.get("strictness") if parsed.get("strictness") in {"more", "balanced", "best"} else "balanced",
             "title_overlay": parsed.get("title_overlay") is not False,
+            "title_style": parsed.get("title_style") if isinstance(parsed.get("title_style"), dict) else None,
             **normalize_clip_cleanup_settings(
                 parsed.get("cut_long_pauses"),
                 parsed.get("pause_threshold_ms"),

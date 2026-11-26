@@ -78,6 +78,8 @@ class LiveOptions:
     min_score: Optional[int] = None
     # The AI's hook title at the top of the first seconds.
     title_overlay: bool = True
+    # Band, position, colour, size and duration of that title (media/title_styles.py).
+    title_style: Optional[Dict[str, Any]] = None
 
 
 class LiveHooks(Protocol):

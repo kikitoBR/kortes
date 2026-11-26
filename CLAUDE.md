@@ -159,6 +159,10 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   `/setup` and Configurações show the account card (`components/desktop/desktop-account.tsx`); the home page shows
   the free cuts left. See `site/README.md`.
 - Videos up to 10 h (`MAX_VIDEO_DURATION` defaults to 36000 in desktop mode).
+- **Installer** (`desktop/build/installer.nsh`, electron-builder's `customCheckAppRunning`/`customRemoveFiles` hooks):
+  after the app closes, the old version's `resources` (most of the ~29k files) is renamed aside in one step and
+  deleted in the background, uninstalling renames the whole folder the same way, and the page says it takes 1-3
+  minutes. A rename that fails changes nothing (stock steps run).
 - **Releases:** the code repo (kikitoBR/kortes) is private; a `v*` tag builds the installer in Actions and publishes
   it to the public **kikitoBR/kortes-releases** (secret `RELEASES_TOKEN`: fine-grained token, Contents read/write on
   that repo). electron-updater (`desktop/package.json` `build.publish`) and the site's download button
@@ -373,7 +377,14 @@ Edit `backend/src/ai.py`: `simplified_system_prompt` controls selection criteria
 - Output: 9:16 vertical format, H.264, even pixel dimensions (`round_to_even()`)
 - Subtitles positioned at 75% down the frame
 - Virality scoring: `hook_score`, `engagement_score`, `value_score`, `shareability_score` (0-25 each, summed to `virality_score` 0-100)
-- Each segment gets an AI-written `hook_title` (3-9 words) burned into the top safe area for the first ~4s (`build_hook_title_ass` in `video_utils.py`), persisted on `generated_clips.hook_title`
+- Each segment gets an AI-written `hook_title` (3-9 words), persisted on `generated_clips.hook_title` and burned in by
+  `captions.build_hook_title_ass` in the task's title style (`media/title_styles.py`, mirrored by
+  `frontend/src/lib/title-style.ts` and the live preview `components/title-style-picker.tsx`): band preset `duas_cores`
+  (default) / `faixa_cor` / `faixa` / `classico` / `destaque`, position `auto` (the webcam/game line in webcam layouts,
+  else top) / top / upper / middle / lower / bottom, accent colour, size, and first ~4 s or the whole clip; up to 3
+  even lines (`split_title_lines`), each its own event placed with `\pos`. Saved as `titleStyle` in the video
+  defaults and `title_style` in the task metadata. Covers (`media/covers.py`) take the same style plus a font
+  (`COVER_FONTS`) and a picture look (`COVER_LOOKS`).
 - Static talking-head crops get a slow ~5% Ken Burns punch-in (`kenburns_zoom_fragment`); tracked pans and split screens keep their own motion
 - Webcam layouts (`WEBCAM_OUTPUT_FORMATS`): `vertical_gameplay` (webcam top), `vertical_gameplay_bottom` (game top),
   `vertical_cam_float` (game full screen, webcam 480 px wide floating at 40,300 with a white border). `vertical_blur`

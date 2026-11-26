@@ -136,11 +136,13 @@ async def process_video_task(
                     )
                     await ctx["redis"].sadd("tasks:dead_letter", task_id)
                     await progress.error("Task failed permanently after retries")
-                    from ..desktop import settle_task_free_cuts
-
-                    await settle_task_free_cuts(task_id)
             except Exception:
                 logger.exception("Failed to persist dead-letter payload")
+            # Free plan: a cancelled or failed video keeps only the cuts it saved;
+            # the rest of its reservation goes back (all of it when none came out).
+            from ..desktop import settle_task_free_cuts
+
+            await settle_task_free_cuts(task_id)
             # Error will be caught by arq and task status will be updated
             raise
 

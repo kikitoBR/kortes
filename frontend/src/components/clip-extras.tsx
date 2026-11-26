@@ -11,6 +11,24 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { downloadBlob } from "@/lib/clip-actions";
 import { parseApiError, formatSupportMessage } from "@/lib/api-error";
+import { Segmented, TitleStylePicker } from "@/components/title-style-picker";
+import { DEFAULT_TITLE_STYLE, normalizeTitleStyle, type TitleStyle } from "@/lib/title-style";
+
+/** Cover fonts (backend media/covers.py COVER_FONTS) and picture treatments (COVER_LOOKS). */
+const COVER_FONTS = [
+  { id: "anton", label: "Anton" },
+  { id: "bebas", label: "Bebas" },
+  { id: "poppins", label: "Poppins" },
+  { id: "archivo", label: "Archivo" },
+  { id: "bangers", label: "Bangers" },
+] as const;
+const COVER_LOOKS = [
+  { id: "vivo", label: "Cores vivas" },
+  { id: "natural", label: "Natural" },
+  { id: "escuro", label: "Mais escuro" },
+] as const;
+type CoverFont = (typeof COVER_FONTS)[number]["id"];
+type CoverLook = (typeof COVER_LOOKS)[number]["id"];
 
 interface ExtraClip {
   id: string;
@@ -39,7 +57,30 @@ export function ClipCoverButton({ taskId, clip }: { taskId: string; clip: ExtraC
   const [imageLoading, setImageLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [style, setStyle] = useState<TitleStyle>(DEFAULT_TITLE_STYLE);
+  const [font, setFont] = useState<CoverFont>("anton");
+  const [look, setLook] = useState<CoverLook>("vivo");
+  const [previewLook, setPreviewLook] = useState({ style: DEFAULT_TITLE_STYLE, font: "anton" as CoverFont, look: "vivo" as CoverLook });
   const textTouched = useRef(false);
+  const styleLoaded = useRef(false);
+
+  // The cover starts in the same style as the clip titles (Configurações).
+  useEffect(() => {
+    if (!open || styleLoaded.current) return;
+    styleLoaded.current = true;
+    fetch("/api/preferences", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (data?.videoDefaults?.titleStyle) setStyle(normalizeTitleStyle(data.videoDefaults.titleStyle));
+      })
+      .catch(() => undefined);
+  }, [open]);
+
+  // One server render per pause in the clicking, not one per click.
+  useEffect(() => {
+    const id = window.setTimeout(() => setPreviewLook({ style, font, look }), 350);
+    return () => window.clearTimeout(id);
+  }, [style, font, look]);
 
   const suggest = useCallback(async () => {
     setSuggesting(true);
@@ -72,7 +113,18 @@ export function ClipCoverButton({ taskId, clip }: { taskId: string; clip: ExtraC
   }, [text]);
 
   const previewUrl =
-    time === null ? null : `${base}?${new URLSearchParams({ text: previewText, t: time.toFixed(2) }).toString()}`;
+    time === null
+      ? null
+      : `${base}?${new URLSearchParams({
+          text: previewText,
+          t: time.toFixed(2),
+          preset: previewLook.style.preset,
+          position: previewLook.style.position,
+          color: previewLook.style.color,
+          size: previewLook.style.size,
+          font: previewLook.font,
+          look: previewLook.look,
+        }).toString()}`;
 
   useEffect(() => {
     if (previewUrl) setImageLoading(true);
@@ -99,15 +151,15 @@ export function ClipCoverButton({ taskId, clip }: { taskId: string; clip: ExtraC
         Capa
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Capa do clipe {clip.clip_order}</DialogTitle>
             <DialogDescription>
-              Escolhemos o quadro mais forte do clipe. Ajuste o texto e o momento, e baixe para usar no Instagram, TikTok e YouTube.
+              Escolhemos o quadro mais forte do clipe. Ajuste o texto, o momento, o estilo e a fonte, e baixe para usar no Instagram, TikTok e YouTube.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-5 sm:grid-cols-[minmax(0,240px)_1fr]">
-            <div className="relative mx-auto aspect-[9/16] w-full max-w-[240px] overflow-hidden rounded-xl bg-muted">
+            <div className="relative mx-auto aspect-[9/16] w-full max-w-[240px] self-start overflow-hidden rounded-xl bg-muted sm:sticky sm:top-0">
               {previewUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -161,6 +213,17 @@ export function ClipCoverButton({ taskId, clip }: { taskId: string; clip: ExtraC
                   <Wand2 className="size-4" />
                   Escolher o melhor quadro
                 </Button>
+              </div>
+              <div className="space-y-3 rounded-xl border bg-muted/30 p-4">
+                <TitleStylePicker value={style} onChange={setStyle} showPreview={false} showDuration={false} />
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground">Fonte</p>
+                  <Segmented value={font} options={[...COVER_FONTS]} onChange={setFont} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground">Imagem</p>
+                  <Segmented value={look} options={[...COVER_LOOKS]} onChange={setLook} />
+                </div>
               </div>
               {error && <p className="text-sm text-destructive">{error}</p>}
               <Button type="button" onClick={() => void download()} disabled={!previewUrl || downloading}>

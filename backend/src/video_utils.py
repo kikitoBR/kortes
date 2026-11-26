@@ -276,6 +276,7 @@ def create_optimized_clip(
     show_hook: Optional[Callable[..., None]] = None,
     show_dir: Optional[Path] = None,
     show_url: Optional[Callable[[str], str]] = None,
+    title_style: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
 
@@ -439,6 +440,8 @@ def create_optimized_clip(
                 effective_keep_ranges,
                 hook_title=hook_title,
                 include_captions=add_subtitles,
+                title_style=title_style,
+                output_format=output_format,
             ):
                 burn_ass_path = ass_path
                 fonts_dir = ass_fonts_dir(

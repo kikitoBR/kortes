@@ -37,6 +37,14 @@ Var pid
 ; Runs where the stock "is the app running?" check runs: before the old version is
 ; removed. It keeps that check and then clears the way.
 !macro customCheckAppRunning
+  !ifndef BUILD_UNINSTALLER
+    ; An update is started by the app, whose working folder is the install folder
+    ; (the shortcut's "Start in"), and this installer inherits it. A process sitting
+    ; in $INSTDIR keeps the old version's uninstaller from renaming it (1.0.6 on:
+    ; customRemoveFiles), which then fails forever with "can't close the app". Leave it
+    ; before anything else; the old uninstaller and the background deletes inherit it.
+    SetOutPath $TEMP
+  !endif
   !insertmacro IS_POWERSHELL_AVAILABLE
   !insertmacro _CHECK_APP_RUNNING
   !ifndef BUILD_UNINSTALLER

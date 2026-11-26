@@ -189,16 +189,25 @@ def _assemblyai_speech_models_value(speech_model: str) -> List[str]:
     return ["universal-3-pro", "universal-2"]
 
 
+# One Whisper model is shared by every thread, and it is not safe to run at once:
+# each transcribe hangs its key/value cache and word-timing hooks on the model's
+# own layers, so two at a time mix their tensors (NaN logits, "cannot reshape
+# tensor of 0 elements") and can bring the whole worker down (the live worker
+# transcribes 3 pieces at once). Loading and transcribing take turns.
+_whisper_lock = threading.Lock()
+
+
 def _get_whisper_model(model_name: str = "base"):
     """Load and cache a Whisper model by name."""
     if not _WHISPER_AVAILABLE:
         raise RuntimeError(
             "Whisper is not installed. Install it with: uv add openai-whisper"
         )
-    if model_name not in _WHISPER_MODEL_CACHE:
-        logger.info("Loading Whisper model: %s", model_name)
-        _WHISPER_MODEL_CACHE[model_name] = _whisper.load_model(model_name)
-    return _WHISPER_MODEL_CACHE[model_name]
+    with _whisper_lock:
+        if model_name not in _WHISPER_MODEL_CACHE:
+            logger.info("Loading Whisper model: %s", model_name)
+            _WHISPER_MODEL_CACHE[model_name] = _whisper.load_model(model_name)
+        return _WHISPER_MODEL_CACHE[model_name]
 
 
 # Whisper reports how far it got through a tqdm bar. A bar of our own reads it
@@ -266,7 +275,8 @@ def transcribe_with_whisper(
         _install_whisper_progress_bar()
     _whisper_progress.callback = on_progress
     try:
-        return model.transcribe(str(audio_path), word_timestamps=True, language=whisper_language)
+        with _whisper_lock:
+            return model.transcribe(str(audio_path), word_timestamps=True, language=whisper_language)
     finally:
         _whisper_progress.callback = None
 

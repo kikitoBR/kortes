@@ -5,7 +5,7 @@ import "../landing.css";
 
 export const metadata: Metadata = {
   title: "Planos · Kortes",
-  description: "Kortes Pro: cortes ilimitados, corte ao vivo e sem marca d'água. Mensal, anual ou vitalício.",
+  description: "Kortes Pro: cortes ilimitados, corte ao vivo e sem marca d'água. Mensal ou anual.",
 };
 
 export default function PlansPage() {

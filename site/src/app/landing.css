@@ -182,7 +182,7 @@
 .lp-ai .lp-h2 { max-width: 18ch; }
 
 /* plans */
-.lp-plans { margin-top: 44px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: stretch; }
+.lp-plans { margin: 44px auto 0; max-width: 980px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: stretch; }
 .lp-plan { position: relative; padding: 28px 24px; display: flex; flex-direction: column; gap: 6px; }
 .lp-plan h3 { margin: 0; font-size: 20px; }
 .lp-plan-price { margin: 8px 0 0; display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
@@ -196,7 +196,7 @@
 .lp-plan.is-featured { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand), 0 40px 80px -40px rgba(235, 81, 22, 0.45); }
 .lp-plan-badge { position: absolute; top: -13px; left: 24px; padding: 5px 12px; border-radius: 999px; background: var(--brand); color: #fff; font-size: 12px; font-weight: 800; letter-spacing: 0.02em; }
 .lp-btn.is-disabled { opacity: 0.55; pointer-events: none; }
-@media (max-width: 1000px) { .lp-plans { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 900px) { .lp-plans { grid-template-columns: 1fr; max-width: 440px; } }
 @media (max-width: 560px) { .lp-plans { grid-template-columns: 1fr; } }
 .lp-pills { list-style: none; padding: 0; margin: 40px 0 0; display: flex; flex-wrap: wrap; gap: 14px; }
 .lp-pills li { padding: 20px 30px; border-radius: 999px; font-size: clamp(20px, 2.4vw, 30px); font-weight: 700; }

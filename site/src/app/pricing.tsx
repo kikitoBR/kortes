@@ -1,5 +1,6 @@
 // The plans, shared by the landing (#planos) and /planos (where the app's "Assinar" opens).
-// Checkout links come from the environment: KIRVANO_CHECKOUT_MONTHLY / _YEARLY / _LIFETIME.
+// Checkout links come from the environment: KIRVANO_CHECKOUT_MONTHLY / _YEARLY.
+// (A lifetime plan still works in the webhook and the panel, but is not offered.)
 
 const PLANS = [
   {
@@ -32,16 +33,6 @@ const PLANS = [
     cta: "Assinar anual",
     env: "KIRVANO_CHECKOUT_YEARLY",
     featured: true,
-  },
-  {
-    id: "lifetime",
-    name: "Vitalício",
-    price: "R$ 697",
-    period: " uma vez",
-    note: "pague uma vez, use para sempre",
-    features: ["Tudo do Pro", "Sem mensalidade", "Todas as atualizações"],
-    cta: "Comprar vitalício",
-    env: "KIRVANO_CHECKOUT_LIFETIME",
   },
 ] as const;
 

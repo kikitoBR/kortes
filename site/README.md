@@ -6,7 +6,7 @@ O site do Kortes (Next.js, na Vercel). Por enquanto:
   monta o corte vertical num celular, tudo num canvas a partir de `public/hero/live.mp4` (`live-540.mp4` no
   celular); os recortes de webcam/jogo são os do detector do Kortes. "Bastidores" (`src/app/backstage.tsx`)
   mostra os agentes montando o corte. Estilos em `src/app/landing.css` (tudo sob `.lp`).
-- `/planos`: Grátis, Pro mensal (R$ 49,90), Pro anual (R$ 397) e Vitalício (R$ 697), com os botões do checkout
+- `/planos`: Grátis, Pro mensal (R$ 49,90) e Pro anual (R$ 397), com os botões do checkout
   da Kirvano (`src/app/pricing.tsx`; também na landing, em `#planos`).
 - `/esqueci-senha` e `/redefinir-senha`: o link de nova senha (por SMTP ou Resend), válido por 1 hora.
 - `/painel`: gerenciamento, protegido por senha (fora do Google: `noindex` e `robots.txt`)
@@ -47,8 +47,9 @@ As tabelas são criadas sozinhas na primeira chamada (não há migração para r
 
 ## Kirvano
 
-Produto do tipo **Serviço** ("Kortes Pro") com três ofertas: Mensal e Anual (assinatura) e Vitalício
-(preço único). Imagens do checkout em `public/checkout/` (logo, logo branca, ícone, banner 1500×400).
+Produto do tipo **Serviço** ("Kortes Pro") com uma oferta de assinatura Mensal e Anual (o comprador escolhe no
+checkout; o webhook lê a frequência). O vitalício (preço único) funciona no webhook e no painel, mas está fora
+da página de planos. Imagens do checkout em `public/checkout/` (logo, logo branca, ícone, banner 1500×400).
 
 - **Webhook:** Integrações → Webhooks → Criar. URL `https://kortes.com.br/api/kirvano`, o token igual a
   `KIRVANO_WEBHOOK_TOKEN` (chega no cabeçalho `Security-Token`), o produto Kortes Pro e os eventos Compra
@@ -75,7 +76,7 @@ Produto do tipo **Serviço** ("Kortes Pro") com três ofertas: Mensal e Anual (a
    - `ADMIN_PASSWORD`: a senha do painel (longa; trocar desconecta quem estiver logado)
    - `DISCORD_WEBHOOK_URL` (opcional): avisa num canal quando chega mensagem
    - `LICENSE_SERVER_URL` (opcional): padrão `https://gemini.kikito.site/v1`
-   - Contas e Kirvano: `LICENSE_ADMIN_TOKEN`, `KIRVANO_WEBHOOK_TOKEN`, `KIRVANO_CHECKOUT_MONTHLY|YEARLY|LIFETIME`.
+   - Contas e Kirvano: `LICENSE_ADMIN_TOKEN`, `KIRVANO_WEBHOOK_TOKEN`, `KIRVANO_CHECKOUT_MONTHLY|YEARLY` (o mesmo link se for uma oferta só com os dois planos).
    - E-mail de nova senha: `SMTP_HOST` (`smtp.hostinger.com`), `SMTP_PORT` (465), `SMTP_USER` (o endereço
      completo da caixa da Hostinger) e `SMTP_PASS`; ou `RESEND_API_KEY` + `MAIL_FROM`. Lista completa em
      `.env.example`.

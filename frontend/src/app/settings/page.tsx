@@ -26,6 +26,7 @@ import { forgetNotifySetting } from "@/lib/desktop-notify";
 import { normalizeVideoDefaults, VIDEO_DEFAULTS, type VideoDefaults } from "@/lib/video-defaults";
 import { cn } from "@/lib/utils";
 import { isDesktop } from "@/lib/edition";
+import { DesktopVersion } from "@/components/desktop/desktop-account";
 import { DesktopSetup } from "@/components/desktop/desktop-setup";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 
@@ -295,7 +296,10 @@ export default function SettingsPage() {
 
   return (
     <main className={cn("mx-auto w-full max-w-3xl px-4 pt-8 sm:px-8 md:pt-10", showSaveBar ? "pb-32" : "pb-16")}>
-      <h1 className="font-display text-3xl font-bold tracking-tight">Configurações</h1>
+      <div className="flex items-baseline justify-between gap-3">
+        <h1 className="font-display text-3xl font-bold tracking-tight">Configurações</h1>
+        {isDesktop ? <DesktopVersion /> : null}
+      </div>
       <p className="mt-1 text-sm text-muted-foreground">{isDesktop ? "Conta, transcrição e padrões para novos vídeos." : "Padrões para novos vídeos gerados, notificações e seu plano."}</p>
 
       <div className="mt-8 space-y-6">

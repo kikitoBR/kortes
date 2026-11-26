@@ -1,6 +1,7 @@
 """Kortes Desktop setup: the license and the AssemblyAI key (only in the desktop edition)."""
 
 import logging
+import os
 import re
 import time
 
@@ -117,6 +118,29 @@ async def _account_call(path: str, payload: AccountPayload, request: Request, db
         logger.info("Desktop signed in to its Kortes account")
         return {"account": {"signed_in": True, **(body.get("account") or {})}}
     return _relay(status, body)
+
+
+class EmailPayload(BaseModel):
+    email: str
+
+
+@router.post("/account/check")
+async def account_check(payload: EmailPayload, request: Request, db: AsyncSession = Depends(get_db)):
+    """Sign-in starts with the e-mail: says whether to ask for the password, create one (bought, first
+    access) or create a free account."""
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    status, body = await site_request(
+        "POST", "/auth/check", site_url=config.kortes_site_url, license_key=None, payload={"email": payload.email},
+    )
+    return _relay(status, body)
+
+
+@router.get("/version")
+async def app_version(request: Request, db: AsyncSession = Depends(get_db)):
+    config = get_config()
+    await resolve_authenticated_user_id(request, db, config)
+    return {"version": os.getenv("KORTES_APP_VERSION", "")}
 
 
 @router.post("/account/login")

@@ -22,6 +22,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { isDesktop } from "@/lib/edition";
 import { isDesktopReady } from "@/components/desktop/desktop-setup";
+import { DesktopVersion } from "@/components/desktop/desktop-account";
 
 // `mobile: false` keeps an item out of the five-slot mobile tab bar.
 // `social: true` items only show when social publishing is enabled for the user.
@@ -136,6 +137,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Announcements key={user.id} userId={user.id} compact={compact} />
           {!compact && billing?.monetization_enabled && <UsageCard billing={billing} />}
           {isDesktop ? null : <UserRow compact={compact} name={user.name} email={user.email} />}
+          {isDesktop && !compact ? <DesktopVersion className="block px-2.5" /> : null}
         </div>
       </aside> : null}
 

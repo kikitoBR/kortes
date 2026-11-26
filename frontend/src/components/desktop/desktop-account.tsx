@@ -23,7 +23,7 @@ export type DesktopAccount = {
   error?: string;
 };
 
-type Mode = "login" | "signup" | "first";
+type Step = "email" | "login" | "signup" | "first";
 
 class AccountRequestError extends Error {
   constructor(message: string, public code?: string) {
@@ -118,7 +118,7 @@ export function AccountCard({ account, onChange }: { account: DesktopAccount; on
           <p className="text-xs text-muted-foreground">
             {account.signed_in
               ? "A conta libera a IA que escolhe os melhores momentos dos seus vídeos."
-              : "Entre com o e-mail da sua compra, ou crie uma conta grátis com 15 cortes para testar."}
+              : "Entre com o e-mail da sua compra, ou com o seu e-mail para criar uma conta grátis com 15 cortes."}
           </p>
         </div>
       </div>
@@ -190,26 +190,45 @@ function SignedIn({ account, leaving, onSignOut }: { account: DesktopAccount; le
   );
 }
 
-const MODE_TEXT: Record<Mode, { button: string; busy: string }> = {
+const STEP_TEXT: Record<Exclude<Step, "email">, { button: string; busy: string }> = {
   login: { button: "Entrar", busy: "Entrando…" },
   signup: { button: "Criar conta grátis", busy: "Criando…" },
   first: { button: "Criar senha e entrar", busy: "Entrando…" },
 };
 
+/** Which step follows the e-mail (asked to the site; an older site falls back to the password). */
+async function nextStep(email: string): Promise<Exclude<Step, "email">> {
+  const response = await fetch("/api/desktop/account/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = (await response.json().catch(() => ({}))) as { next?: string; detail?: string };
+  if (response.status === 400) throw new AccountRequestError(data.detail || "Digite um e-mail válido.");
+  // No internet: say so. Any other trouble with this step: ask the password, as before.
+  if (response.status === 502) throw new AccountRequestError(data.detail || "Não deu para falar com o servidor do Kortes.");
+  if (!response.ok) return "login";
+  return data.next === "first" ? "first" : data.next === "new" ? "signup" : "login";
+}
+
+const STEP_NOTICE: Partial<Record<Step, string>> = {
+  first: "Encontramos sua compra! É o seu primeiro acesso: crie uma senha para entrar.",
+  signup: "Ainda não existe conta com este e-mail. Crie uma conta grátis com 15 cortes para testar. Se você comprou, confira se é o mesmo e-mail da compra.",
+};
+
+/** E-mail first; then the password, the first password of a purchase, or a free account. */
 function SignInForm({ error: initialError, onDone }: { error?: string; onDone: () => Promise<void> }) {
-  const [mode, setMode] = useState<Mode>("login");
+  const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError ?? null);
-  const [notice, setNotice] = useState<string | null>(null);
 
-  const switchMode = (next: Mode, message: string | null = null) => {
-    setMode(next);
-    setError(null);
-    setNotice(message);
+  const goTo = (next: Step, message: string | null = null) => {
+    setStep(next);
+    setError(message);
     setPassword("");
     setConfirm("");
   };
@@ -217,80 +236,93 @@ function SignInForm({ error: initialError, onDone }: { error?: string; onDone: (
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    if (mode !== "login" && password.length < 8) {
+    const typed = email.trim();
+    if (step === "email") {
+      setBusy(true);
+      try {
+        goTo(await nextStep(typed));
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : "Não deu certo. Tente de novo.");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (step !== "login" && password.length < 8) {
       setError("A senha precisa ter pelo menos 8 caracteres.");
       return;
     }
-    if (mode !== "login" && password !== confirm) {
+    if (step !== "login" && password !== confirm) {
       setError("As duas senhas não são iguais.");
       return;
     }
     setBusy(true);
     try {
-      const path = mode === "login" ? "/login" : mode === "signup" ? "/signup" : "/set-password";
-      await accountRequest(path, { email: email.trim(), password, name: name.trim() });
+      const path = step === "login" ? "/login" : step === "signup" ? "/signup" : "/set-password";
+      await accountRequest(path, { email: typed, password, name: name.trim() });
       await onDone();
     } catch (exc) {
       const code = exc instanceof AccountRequestError ? exc.code : undefined;
       const message = exc instanceof Error ? exc.message : "Não deu certo. Tente de novo.";
-      if (code === "needs_password") {
-        switchMode("first", "Encontramos sua compra. Crie uma senha para este e-mail e pronto.");
-      } else if (code === "no_account" && mode === "login") {
-        switchMode("signup", "Não achamos conta com este e-mail. Crie uma conta grátis, ou confira o e-mail da compra.");
-      } else if (code === "has_password") {
-        switchMode("login", message);
-      } else {
-        setError(message);
-      }
+      // The account changed between the steps (bought meanwhile, or the password was just created).
+      if (code === "needs_password") goTo("first");
+      else if (code === "no_account") goTo("signup");
+      else if (code === "has_password") goTo("login", message);
+      else setError(message);
     } finally {
       setBusy(false);
     }
   };
 
-  const text = MODE_TEXT[mode];
+  const notice = STEP_NOTICE[step];
   return (
     <div className="space-y-4">
-      {mode === "first" ? null : (
-        <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1 text-sm">
-          {(["login", "signup"] as const).map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => switchMode(item)}
-              className={cn(
-                "rounded-lg px-3 py-1.5 font-medium transition-colors",
-                mode === item ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {item === "login" ? "Já tenho conta" : "Criar conta grátis"}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {notice ? <p className="rounded-lg bg-brand/10 p-3 text-sm text-foreground">{notice}</p> : null}
-
       <form onSubmit={(event) => void submit(event)} className="space-y-3">
-        {mode === "signup" ? (
+        {step === "email" ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Digite seu e-mail. Se você acabou de comprar, use o e-mail da compra.
+            </p>
+            <Input
+              type="email"
+              placeholder="Seu e-mail"
+              autoComplete="email"
+              autoFocus
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </>
+        ) : (
+          <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+            <span className="truncate font-medium">{email.trim()}</span>
+            <button
+              type="button"
+              className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => goTo("email")}
+            >
+              Trocar e-mail
+            </button>
+          </div>
+        )}
+
+        {notice ? <p className="rounded-lg bg-brand/10 p-3 text-sm text-foreground">{notice}</p> : null}
+
+        {step === "signup" ? (
           <Input placeholder="Seu nome (opcional)" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} />
         ) : null}
-        <Input
-          type="email"
-          placeholder="Seu e-mail"
-          autoComplete="email"
-          required
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-        />
-        <Input
-          type="password"
-          placeholder={mode === "login" ? "Senha" : "Crie uma senha (mínimo 8 caracteres)"}
-          autoComplete={mode === "login" ? "current-password" : "new-password"}
-          required
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        {mode === "login" ? null : (
+        {step === "email" ? null : (
+          <Input
+            type="password"
+            placeholder={step === "login" ? "Sua senha" : "Crie uma senha (mínimo 8 caracteres)"}
+            autoComplete={step === "login" ? "current-password" : "new-password"}
+            autoFocus={step !== "signup"}
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        )}
+        {step === "first" || step === "signup" ? (
           <Input
             type="password"
             placeholder="Repita a senha"
@@ -299,39 +331,39 @@ function SignInForm({ error: initialError, onDone }: { error?: string; onDone: (
             value={confirm}
             onChange={(event) => setConfirm(event.target.value)}
           />
-        )}
+        ) : null}
         {error ? (
           <p className="flex items-start gap-1.5 text-sm text-destructive">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
             {error}
           </p>
         ) : null}
-        <Button type="submit" className="w-full" disabled={busy || !email.trim() || !password}>
+        <Button type="submit" className="w-full" disabled={busy || !email.trim() || (step !== "email" && !password)}>
           {busy ? (
             <>
-              <Loader2 className="size-4 animate-spin" /> {text.busy}
+              <Loader2 className="size-4 animate-spin" /> {step === "email" ? "Verificando…" : STEP_TEXT[step].busy}
             </>
+          ) : step === "email" ? (
+            "Continuar"
           ) : (
-            text.button
+            STEP_TEXT[step].button
           )}
         </Button>
       </form>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        {mode === "first" ? (
-          <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => switchMode("login")}>
-            Voltar
-          </button>
-        ) : (
+        {step === "login" ? (
           <a href={FORGOT_PASSWORD_URL} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground">
             Esqueci minha senha
           </a>
+        ) : (
+          <span />
         )}
         <a href={PLANS_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
           Ver planos <ExternalLink className="size-3" />
         </a>
       </div>
-      {mode === "signup" ? (
+      {step === "signup" ? (
         <p className="text-xs text-muted-foreground">
           A conta grátis dá 15 cortes, até 5 por vídeo ou live, com marca d&apos;água. Cada conta funciona em 1
           computador.
@@ -364,4 +396,17 @@ export function FreePlanBanner({ account, message }: { account: DesktopAccount |
       </a>
     </div>
   );
+}
+
+/** "Kortes 1.0.7": the installed app's version (from the launcher, through the backend). */
+export function DesktopVersion({ className }: { className?: string }) {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/desktop/version", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { version?: string } | null) => setVersion(data?.version || null))
+      .catch(() => setVersion(null));
+  }, []);
+  if (!version) return null;
+  return <span className={cn("text-xs tabular-nums text-muted-foreground", className)}>Kortes {version}</span>;
 }

@@ -144,8 +144,9 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   site (`KORTES_SITE_URL`, default `https://kortes.com.br`) with the license, device id and `KORTES_APP_VERSION`.
   The site is `site/` (Next.js on Vercel, Postgres): `/api/v1/*` for the app, `/painel` (password
   `ADMIN_PASSWORD`) to answer messages and publish announcements. See `site/README.md`.
-- **Accounts and plans:** the app signs in with email + password on the site (`/desktop/account/login|signup|
-  set-password|logout`, relayed to `site/` `/api/v1/auth/*`); the site hands back a session (`KORTES_ACCOUNT_TOKEN`,
+- **Accounts and plans:** the app signs in on the site, e-mail first (`/desktop/account/check` → `/api/v1/auth/check`
+  says `password` / `first` (bought, no password yet: create one) / `new` (free account)), then
+  `/desktop/account/login|signup|set-password|logout`, relayed to `site/` `/api/v1/auth/*`; the site hands back a session (`KORTES_ACCOUNT_TOKEN`,
   saved encrypted) and the account's `kl_` license (saved as `OPENAI_API_KEY`, rotated on every sign-in). One PC per
   account (`x-kortes-device`). Free plan: a balance of 15 cuts per PC, up to 5 per video/live (`desktop.claim_free_clip`
   in `create_task` reserves them and returns the count; `desktop.settle_task_free_cuts`, called by the workers when
@@ -158,6 +159,7 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   A `kl_` key typed before accounts still works with no limit. Plans come from Kirvano (`site/` `/api/kirvano`).
   `/setup` and Configurações show the account card (`components/desktop/desktop-account.tsx`); the home page shows
   the free cuts left. See `site/README.md`.
+- The app's version (`KORTES_APP_VERSION`, `GET /desktop/version`) shows in Configurações and the sidebar.
 - Videos up to 10 h (`MAX_VIDEO_DURATION` defaults to 36000 in desktop mode).
 - **Installer** (`desktop/build/installer.nsh`, electron-builder's `customCheckAppRunning`/`customRemoveFiles` hooks):
   after the app closes, the old version's `resources` (most of the ~29k files) is renamed aside in one step and

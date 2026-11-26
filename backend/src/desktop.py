@@ -250,7 +250,7 @@ def source_key(url: str, source_type: str) -> str:
 FREE_CLIPS_PER_VIDEO = 5
 
 
-async def claim_free_clip(site_url: str, url: str, source_type: str) -> dict:
+async def claim_free_clip(site_url: str, url: str, source_type: str, title: str = "") -> dict:
     """Ask the site before cutting: paid plans pass, the free plan spends a cut.
 
     Returns {"pro": bool, "source": key, "clips": n} (n = the free plan's best cuts
@@ -265,7 +265,8 @@ async def claim_free_clip(site_url: str, url: str, source_type: str) -> dict:
     if not token:
         raise SetupError("signed_out", "Entre na sua conta do Kortes em Configurações.", 401)
     key = source_key(url, source_type)
-    status, body = await site_request("POST", "/clips/claim", site_url=site_url, license_key=token, payload={"source": key})
+    payload = {"source": key, "kind": "live" if source_type == "live" else "video", "title": (title or "")[:200]}
+    status, body = await site_request("POST", "/clips/claim", site_url=site_url, license_key=token, payload=payload)
     if status != 200:
         detail = body.get("detail") if isinstance(body, dict) else None
         code = body.get("code") if isinstance(body, dict) else None
@@ -274,13 +275,15 @@ async def claim_free_clip(site_url: str, url: str, source_type: str) -> dict:
         clips = max(1, int(body.get("clips") or FREE_CLIPS_PER_VIDEO))
     except (TypeError, ValueError):
         clips = FREE_CLIPS_PER_VIDEO
-    return {"pro": bool(body.get("pro")), "source": key, "clips": clips}
+    # "job": the site's log of this video or live (any plan), finished by settle_task_free_cuts.
+    return {"pro": bool(body.get("pro")), "source": key, "clips": clips, "job": body.get("job")}
 
 
 async def settle_task_free_cuts(task_id: str, clips: Optional[int] = None) -> None:
-    """A free video or live is done: tell the site how many cuts it really made, so
-    the reserved ones it did not make go back to the balance (none made gives the
-    video back too). ``clips`` defaults to the task's saved clips. Best effort."""
+    """A video or live is done: tell the site how many cuts it really made. On the
+    free plan the reserved ones it did not make go back to the balance (none made
+    gives the video back too); on any plan the site logs the count (Painel →
+    Clientes). ``clips`` defaults to the task's saved clips. Best effort."""
     from .config import get_config
 
     config = get_config()
@@ -291,28 +294,41 @@ async def settle_task_free_cuts(task_id: str, clips: Optional[int] = None) -> No
         from .repositories.task_repository import TaskRepository
 
         async with AsyncSessionLocal() as db:
-            metadata = await TaskRepository.load_source_metadata(db, task_id)
-            key = (metadata or {}).get("free_source")
-            if not key:
+            metadata = await TaskRepository.load_source_metadata(db, task_id) or {}
+            key = metadata.get("free_source")
+            job = metadata.get("cut_job")
+            if not key and not job:
                 return
             if clips is None:
                 task = await TaskRepository.get_task_by_id(db, task_id)
                 clips = len((task or {}).get("generated_clips_ids") or [])
         token = account_token()
-        if token:
-            await site_request(
-                "POST", "/clips/settle", site_url=config.kortes_site_url, license_key=token,
-                payload={"source": key, "clips": int(clips)},
-            )
+        if not token:
+            logger.warning("Free cuts of task %s not settled: signed out", task_id)
+            return
+        payload: dict[str, Any] = {"source": key or "", "clips": int(clips)}
+        if job:
+            payload["job"] = job
+        status, body = await site_request(
+            "POST", "/clips/settle", site_url=config.kortes_site_url, license_key=token, payload=payload,
+        )
+        if status == 200:
+            logger.info("Task %s settled with the site: %d cuts", task_id, int(clips))
+        else:
+            detail = body.get("detail") if isinstance(body, dict) else body
+            logger.warning("The site refused to settle task %s (%s): %s", task_id, status, detail)
     except Exception:
         logger.warning("Could not settle the free cuts of task %s", task_id, exc_info=True)
 
 
-async def release_free_clip(site_url: str, key: str) -> None:
+async def release_free_clip(site_url: str, key: str, job: Optional[str] = None) -> None:
     """Give a reserved free cut back (the video gave no cut). Best effort."""
     token = account_token()
-    if token and key:
-        await site_request("POST", "/clips/release", site_url=site_url, license_key=token, payload={"source": key})
+    if token and (key or job):
+        payload: dict[str, Any] = {"source": key or ""}
+        if job:
+            payload["job"] = job
+        await site_request("POST", "/clips/release", site_url=site_url, license_key=token, payload=payload)
 
 
 # ---------------------------------------------------------------- the cuts' folder

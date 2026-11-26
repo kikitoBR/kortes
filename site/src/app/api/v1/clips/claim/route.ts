@@ -11,10 +11,14 @@ export async function POST(request: Request) {
     const bearer = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
     if (bearer.startsWith("kl_")) return json(await legacyLicense(bearer, request));
     const { sql, account, device } = await accountFromRequest(request);
-    const body = (await request.json().catch(() => ({}))) as { source?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { source?: unknown; kind?: unknown; title?: unknown };
     const source = String(body.source ?? "").trim();
     if (!source) throw new AccountError("Vídeo sem identificação.");
-    return json(await claimClip(sql, account, device, source));
+    return json(await claimClip(sql, account, device, source, {
+      kind: String(body.kind ?? ""),
+      title: String(body.title ?? ""),
+      version: request.headers.get("x-kortes-version") || "",
+    }));
   } catch (error) {
     return errorResponse(error);
   }

@@ -157,6 +157,9 @@ The same code runs as a single-user app on the customer's PC (the web stays as i
   `watermark`/`free_source`/`free_clips` in the source metadata. Desktop lives look every 60 s with 20 s pieces
   (web: 120/30) so a moment is cut about a minute after it ends.
   A `kl_` key typed before accounts still works with no limit. Plans come from Kirvano (`site/` `/api/kirvano`).
+  Every video/live of any plan is also logged on the site (`cut_jobs`: the claim returns a `job`, kept as `cut_job` in
+  the task metadata, and the settle sends the real count); Painel → Clientes shows cuts made, app version and last seen.
+  A refused settle is logged by the app ("The site refused to settle task ...").
   `/setup` and Configurações show the account card (`components/desktop/desktop-account.tsx`); the home page shows
   the free cuts left. See `site/README.md`.
 - The app's version (`KORTES_APP_VERSION`, `GET /desktop/version`) shows in Configurações and the sidebar.

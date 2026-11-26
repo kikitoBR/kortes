@@ -569,17 +569,21 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         # plan spends one of its cuts on this video or live (1 cut, watermarked).
         free_claim = None
         free_clips = 0
+        cut_job = None
         if runtime_config.desktop:
             from ...desktop import SetupError, claim_free_clip
 
             try:
-                claim = await claim_free_clip(runtime_config.kortes_site_url, raw_source["url"], source_type)
+                claim = await claim_free_clip(
+                    runtime_config.kortes_site_url, raw_source["url"], source_type, source_title or ""
+                )
             except SetupError as exc:
                 raise HTTPException(
                     status_code=exc.status if exc.status in (401, 402, 403) else 400, detail=exc.message
                 )
             free_claim = None if claim["pro"] else claim["source"]
             free_clips = claim["clips"]
+            cut_job = claim.get("job")
 
         async with generation_allowance_guard(
             db, user_id, enabled=runtime_config.monetization_enabled
@@ -638,6 +642,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                         title_style=title_style,
                     )
                     | ({"watermark": True, "free_source": free_claim, "free_clips": free_clips} if free_claim else {})
+                    | ({"cut_job": cut_job} if cut_job else {})
                     | (
                         {
                             "live": True,
@@ -699,10 +704,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     progress_message="Unable to queue processing. Please retry this generation.",
                     expected_statuses=["queued"],
                 )
-                if free_claim:
+                if free_claim or cut_job:
                     from ...desktop import release_free_clip
 
-                    await release_free_clip(runtime_config.kortes_site_url, free_claim)
+                    await release_free_clip(runtime_config.kortes_site_url, free_claim or "", cut_job)
                 raise
 
             logger.info(f"Task {task_id} created and job {job_id} enqueued")
@@ -1780,6 +1785,8 @@ async def resume_task(
                     if not claim["pro"]:
                         metadata["free_clips"] = claim["clips"]
                         metadata["free_source"] = claim["source"]
+                    if claim.get("job"):
+                        metadata["cut_job"] = claim["job"]
                 except SetupError as exc:
                     if exc.code != "same_source":
                         raise HTTPException(

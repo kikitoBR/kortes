@@ -27,6 +27,16 @@ export default async function ClientPage({ params, searchParams }: {
   const others = account.device
     ? await sql<{ id: string; email: string }[]>`SELECT DISTINCT a.id, a.email FROM free_clips f JOIN accounts a ON a.id = f.account_id WHERE f.device = ${account.device} AND a.id <> ${account.id}`
     : [];
+  const jobs = await sql<CutJob[]>`
+    SELECT id, kind, title, source_key, free, clips, app_version, created_at, finished_at
+    FROM cut_jobs WHERE account_id = ${account.id} ORDER BY created_at DESC LIMIT 30`;
+  const [usage] = await sql<{ cuts: number; videos: number; lives: number; last: Date | null; week: number }[]>`
+    SELECT COALESCE(sum(clips), 0)::int AS cuts,
+      count(*) FILTER (WHERE kind = 'video')::int AS videos,
+      count(*) FILTER (WHERE kind = 'live')::int AS lives,
+      max(created_at) AS last,
+      COALESCE(sum(clips) FILTER (WHERE created_at > now() - interval '7 days'), 0)::int AS week
+    FROM cut_jobs WHERE account_id = ${account.id}`;
   const payments = await sql<{ event: string; result: string; created_at: Date }[]>`
     SELECT event, result, created_at FROM payment_events WHERE email = ${account.email} ORDER BY created_at DESC LIMIT 20`;
   const limit = FREE_CLIPS + (extra?.extra_clips ?? 0);
@@ -84,6 +94,35 @@ export default async function ClientPage({ params, searchParams }: {
             <p className="muted small">{account.device ? "A conta só entra neste PC. Libere para o cliente trocar de computador." : "O próximo login prende a conta ao computador."}</p>
             <form action={releaseDevice}>{hidden}<button type="submit" className="ghost" disabled={!account.device}>Liberar troca de PC</button></form>
           </div>
+        </div>
+
+        <div className="card stack">
+          <h2 className="card-title"><Icon name="scissors" /> Uso do app</h2>
+          <div className="stats" style={{ marginBottom: 0 }}>
+            <div className="stat"><b>{usage.cuts}</b><span>cortes feitos</span></div>
+            <div className="stat"><b>{usage.week}</b><span>nos últimos 7 dias</span></div>
+            <div className="stat"><b>{usage.videos}</b><span>{usage.videos === 1 ? "vídeo" : "vídeos"}</span></div>
+            <div className="stat"><b>{usage.lives}</b><span>{usage.lives === 1 ? "live" : "lives"}</span></div>
+          </div>
+          <dl className="kv">
+            <div><dt>Versão do app</dt><dd>{account.app_version ? `Kortes ${account.app_version}` : "—"}</dd></div>
+            <div><dt>Visto por último</dt><dd>{account.last_seen_at ? formatDate(account.last_seen_at) : "—"}</dd></div>
+            <div><dt>Último vídeo ou live</dt><dd>{usage.last ? formatDate(usage.last) : "Nenhum ainda"}</dd></div>
+          </dl>
+          {jobs.length ? (
+            <ul className="history">
+              {jobs.map((job) => (
+                <li key={job.id}>
+                  <span style={{ overflowWrap: "anywhere" }}>
+                    <span className={`badge ${job.kind === "live" ? "open" : "closed"}`} style={{ marginRight: 8 }}>{job.kind === "live" ? "Live" : "Vídeo"}</span>
+                    <SourceLink job={job} />
+                    {job.free ? <span className="muted small"> · grátis</span> : null}
+                  </span>
+                  <span className="muted" style={{ whiteSpace: "nowrap" }}>{jobResult(job)} · {formatDate(job.created_at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="muted small">Nenhum vídeo ou live registrado. O registro começa na versão 1.0.10 do app.</p>}
         </div>
 
         <div className="card stack">
@@ -146,4 +185,38 @@ export default async function ClientPage({ params, searchParams }: {
       </div>
     </Shell>
   );
+}
+
+type CutJob = {
+  id: string;
+  kind: string;
+  title: string;
+  source_key: string;
+  free: boolean;
+  clips: number | null;
+  app_version: string;
+  created_at: Date;
+  finished_at: Date | null;
+};
+
+function jobResult(job: CutJob) {
+  if (job.clips === null) {
+    // Still running, or the app closed before it finished (no count came back).
+    return Date.now() - new Date(job.created_at).getTime() < 12 * 3600e3 ? "em andamento" : "sem retorno";
+  }
+  if (job.clips === 0) return "nenhum corte";
+  return `${job.clips} ${job.clips === 1 ? "corte" : "cortes"}`;
+}
+
+/** The video or live, linked when its key says where it is ("yt:<id>", "live:<channel>:<day>"). */
+function SourceLink({ job }: { job: CutJob }) {
+  const key = job.source_key;
+  let href = "";
+  if (key.startsWith("yt:")) href = `https://youtu.be/${key.slice(3)}`;
+  else if (key.startsWith("live:")) {
+    const base = key.slice(5).replace(/:\d{4}-\d{2}-\d{2}$/, "");
+    href = /^https?:\/\//.test(base) ? base : /^[\w-]{11}$/.test(base) ? `https://youtu.be/${base}` : "";
+  }
+  const label = job.title || (key.startsWith("file:") ? "Arquivo enviado" : key.slice(0, 60));
+  return href ? <a href={href} target="_blank" rel="noreferrer">{label}</a> : <span>{label}</span>;
 }

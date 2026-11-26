@@ -140,6 +140,24 @@ CREATE TABLE IF NOT EXISTS payment_events (
 ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS dedupe_key text NOT NULL DEFAULT '';
 ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS applied boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS payment_events_dedupe ON payment_events (dedupe_key) WHERE applied;
+-- Every video or live an account cuts (any plan) and how many cuts it made
+-- (clips NULL while it runs). Painel → Clientes.
+CREATE TABLE IF NOT EXISTS cut_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id uuid REFERENCES accounts(id) ON DELETE CASCADE,
+  device text NOT NULL DEFAULT '',
+  source_key text NOT NULL DEFAULT '',
+  kind text NOT NULL DEFAULT 'video',
+  title text NOT NULL DEFAULT '',
+  free boolean NOT NULL DEFAULT false,
+  clips integer,
+  app_version text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS cut_jobs_account ON cut_jobs (account_id, created_at DESC);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS app_version text NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
 `;
 
 /** The database, with its tables created on first use (no migration step to run). */

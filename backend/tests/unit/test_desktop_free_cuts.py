@@ -69,3 +69,27 @@ async def test_a_failed_video_gives_everything_back(desktop_config, monkeypatch)
     calls = _fake_task(monkeypatch, {"free_source": "live:x:2026-11-24", "free_clips": 2}, [])
     await desktop.settle_task_free_cuts("task-3")
     assert calls == [("/clips/settle", {"source": "live:x:2026-11-24", "clips": 0}, "ks_test")]
+
+
+@pytest.mark.asyncio
+async def test_every_plan_reports_its_cuts_to_the_job_log(desktop_config, monkeypatch):
+    # Paid: only the log (nothing to give back). Free live stopped after 1 of 5: both.
+    calls = _fake_task(monkeypatch, {"cut_job": "job-paid"}, ["c1", "c2"])
+    await desktop.settle_task_free_cuts("task-4")
+    assert calls == [("/clips/settle", {"source": "", "clips": 2, "job": "job-paid"}, "ks_test")]
+    calls = _fake_task(monkeypatch, {"free_source": "live:x:2026-11-26", "free_clips": 5, "cut_job": "job-1"}, ["c1"])
+    await desktop.settle_task_free_cuts("task-5")
+    assert calls == [("/clips/settle", {"source": "live:x:2026-11-26", "clips": 1, "job": "job-1"}, "ks_test")]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_settle_is_logged(desktop_config, monkeypatch, caplog):
+    _fake_task(monkeypatch, {"free_source": "yt:abc"}, ["c1"])
+
+    async def refused(method, path, **kwargs):
+        return 403, {"detail": "Esta conta está ativa em outro computador."}
+
+    monkeypatch.setattr(desktop, "site_request", refused)
+    with caplog.at_level("WARNING"):
+        await desktop.settle_task_free_cuts("task-6")
+    assert "refused to settle task task-6 (403)" in caplog.text

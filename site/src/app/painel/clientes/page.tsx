@@ -11,8 +11,9 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
   const sql = await painelDb();
   if (typeof sql === "string") return <Shell active="clientes"><SetupNotice message={sql} /></Shell>;
   const search = `%${q.trim().toLowerCase()}%`;
-  const rows = await sql<(Account & { free_used: number })[]>`
-    SELECT a.*, (SELECT COALESCE(sum(f.clips), 0)::int FROM free_clips f WHERE f.device = a.device AND a.device <> '') AS free_used
+  const rows = await sql<(Account & { free_used: number; cuts: number })[]>`
+    SELECT a.*, (SELECT COALESCE(sum(f.clips), 0)::int FROM free_clips f WHERE f.device = a.device AND a.device <> '') AS free_used,
+      (SELECT COALESCE(sum(j.clips), 0)::int FROM cut_jobs j WHERE j.account_id = a.id) AS cuts
     FROM accounts a
     WHERE (${q} = '' OR a.email LIKE ${search} OR a.name ILIKE ${search})
       AND (${plano} = '' OR a.plan = ${plano})
@@ -22,18 +23,26 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
       count(*) FILTER (WHERE plan = 'lifetime' OR (plan IN ('monthly','yearly') AND plan_until > now() - interval '3 days'))::int AS pro
     FROM accounts`;
   const free = total - pro;
+  const [activity] = await sql<{ today: number; week: number; active: number }[]>`
+    SELECT COALESCE(sum(clips) FILTER (WHERE created_at > now() - interval '1 day'), 0)::int AS today,
+      COALESCE(sum(clips) FILTER (WHERE created_at > now() - interval '7 days'), 0)::int AS week,
+      count(DISTINCT account_id) FILTER (WHERE created_at > now() - interval '7 days')::int AS active
+    FROM cut_jobs`;
   return (
     <Shell active="clientes">
       <div className="pagehead">
         <div>
           <h1>Clientes</h1>
-          <p>Contas do app: plano, computador e cortes grátis. Clique em uma para gerenciar.</p>
+          <p>Contas do app: plano, computador, cortes feitos e versão do app. Clique em uma para gerenciar.</p>
         </div>
       </div>
       <div className="stats">
         <div className="stat"><b>{total}</b><span>contas</span></div>
         <div className="stat accent"><b>{pro}</b><span>pagantes</span></div>
         <div className="stat"><b>{free}</b><span>no plano grátis</span></div>
+        <div className="stat"><b>{activity.today}</b><span>cortes em 24 h</span></div>
+        <div className="stat"><b>{activity.week}</b><span>cortes em 7 dias</span></div>
+        <div className="stat"><b>{activity.active}</b><span>ativos em 7 dias</span></div>
       </div>
       <form className="toolbar" method="get">
         <span className="search">
@@ -49,7 +58,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
       {erro ? <p className="alert error" style={{ marginBottom: 14 }}>{erro}</p> : null}
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>Conta</th><th>Plano</th><th>Até</th><th>PC</th><th>Cortes grátis</th><th>Último login</th></tr></thead>
+          <thead><tr><th>Conta</th><th>Plano</th><th>Até</th><th>PC</th><th>Cortes feitos</th><th>Cortes grátis</th><th>Versão</th><th>Visto por último</th></tr></thead>
           <tbody>
             {rows.map((a) => {
               const paid = isPro(a);
@@ -64,12 +73,14 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
                   <td><span className={`badge ${tone}`}>{label}</span></td>
                   <td className="muted small">{a.plan === "lifetime" ? "Sempre" : a.plan_until ? formatDate(a.plan_until) : "—"}</td>
                   <td className="muted small">{a.device ? <code>{a.device.slice(0, 8)}</code> : "—"}</td>
+                  <td>{a.cuts}</td>
                   <td>{paid ? <span className="muted">—</span> : a.free_used}</td>
-                  <td className="muted small">{a.last_login_at ? formatDate(a.last_login_at) : "nunca"}</td>
+                  <td className="muted small">{a.app_version || "—"}</td>
+                  <td className="muted small">{a.last_seen_at ? formatDate(a.last_seen_at) : a.last_login_at ? formatDate(a.last_login_at) : "nunca"}</td>
                 </tr>
               );
             })}
-            {rows.length === 0 ? <tr><td colSpan={6} className="empty">Nenhuma conta encontrada.</td></tr> : null}
+            {rows.length === 0 ? <tr><td colSpan={8} className="empty">Nenhuma conta encontrada.</td></tr> : null}
           </tbody>
         </table>
       </div>

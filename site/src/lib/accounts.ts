@@ -32,6 +32,8 @@ export type Account = {
   notes: string;
   created_at: Date;
   last_login_at: Date | null;
+  app_version?: string;
+  last_seen_at?: Date | null;
 };
 
 /** An error the app shows as is. `code` lets it react (e.g. ask for a new password). */
@@ -104,6 +106,9 @@ export async function accountFromRequest(request: Request): Promise<{ sql: postg
     throw new AccountError("Esta conta está ativa em outro computador.", 403, "other_device");
   }
   await sql`UPDATE account_sessions SET last_seen_at = now() WHERE token_hash = ${sha256(token)}`;
+  // The app's version and when it was last seen (Painel → Clientes).
+  const version = (request.headers.get("x-kortes-version") || "").trim().slice(0, 32);
+  await sql`UPDATE accounts SET last_seen_at = now(), app_version = COALESCE(NULLIF(${version}, ''), app_version) WHERE id = ${row.id}`;
   return { sql, account: row, device: device || row.device };
 }
 
@@ -127,8 +132,23 @@ export async function freeUsage(sql: postgres.Sql, device: string) {
  * than are left. The app then makes at most `clips` cuts and gives back what it did
  * not make (settleClips). The same video twice is refused. Paid accounts always get through.
  */
-export async function claimClip(sql: postgres.Sql, account: Account, device: string, sourceKey: string) {
-  if (isPro(account)) return { ok: true as const, pro: true, used: 0, limit: 0, clips: 0 };
+export type CutJobInfo = { kind?: string; title?: string; version?: string };
+
+/** Logs one video or live being cut (any plan); its cuts come with settleClips. */
+async function startCutJob(sql: postgres.Sql, account: Account, device: string, key: string, free: boolean, info: CutJobInfo) {
+  const kind = info.kind === "live" ? "live" : "video";
+  const [row] = await sql<{ id: string }[]>`
+    INSERT INTO cut_jobs (account_id, device, source_key, kind, title, free, app_version)
+    VALUES (${account.id}, ${device}, ${key}, ${kind}, ${(info.title || "").slice(0, 200)}, ${free}, ${(info.version || "").slice(0, 32)})
+    RETURNING id`;
+  return row.id;
+}
+
+export async function claimClip(sql: postgres.Sql, account: Account, device: string, sourceKey: string, info: CutJobInfo = {}) {
+  if (isPro(account)) {
+    const job = await startCutJob(sql, account, device, sourceKey.slice(0, 200), false, info);
+    return { ok: true as const, pro: true, used: 0, limit: 0, clips: 0, job };
+  }
   if (!device) throw new AccountError("Atualize o Kortes para a versão mais recente.", 400, "missing_device");
   const key = sourceKey.slice(0, 200);
   const usage = await freeUsage(sql, device);
@@ -151,7 +171,8 @@ export async function claimClip(sql: postgres.Sql, account: Account, device: str
   const clips = Math.min(FREE_CLIPS_PER_VIDEO, left);
   await sql`INSERT INTO free_devices (device) VALUES (${device}) ON CONFLICT (device) DO NOTHING`;
   await sql`INSERT INTO free_clips (device, account_id, source_key, clips) VALUES (${device}, ${account.id}, ${key}, ${clips})`;
-  return { ok: true as const, pro: false, used: usage.used + clips, limit: usage.limit, clips };
+  const job = await startCutJob(sql, account, device, key, true, info);
+  return { ok: true as const, pro: false, used: usage.used + clips, limit: usage.limit, clips, job };
 }
 
 /**
@@ -171,6 +192,14 @@ export async function settleClips(sql: postgres.Sql, device: string, sourceKey: 
   await sql`
     UPDATE free_clips SET clips = ${Math.min(count, FREE_CLIPS_PER_VIDEO)}
     WHERE device = ${device} AND source_key = ${key} AND created_at > now() - interval '1 day'`;
+}
+
+/** A logged video or live is done with `made` cuts (only the account's own jobs). */
+export async function finishCutJob(sql: postgres.Sql, account: Account, job: unknown, made: number) {
+  const id = String(job ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return;
+  const count = Math.max(0, Math.floor(Number(made) || 0));
+  await sql`UPDATE cut_jobs SET clips = ${count}, finished_at = now() WHERE id = ${id} AND account_id = ${account.id}`;
 }
 
 // ---------------------------------------------------------------- sign-in

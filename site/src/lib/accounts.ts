@@ -156,8 +156,8 @@ export async function claimClip(sql: postgres.Sql, account: Account, device: str
 
 /**
  * The video or live is done: keep only the cuts it made, the rest go back to the
- * balance. None made gives the video back too (it can be tried again). Only lowers,
- * and only for a recent reservation, never an old one.
+ * balance. None made gives the video back too (it can be tried again). Only for a
+ * recent reservation, never an old one.
  */
 export async function settleClips(sql: postgres.Sql, device: string, sourceKey: string, made: number) {
   const key = sourceKey.slice(0, 200);
@@ -166,8 +166,10 @@ export async function settleClips(sql: postgres.Sql, device: string, sourceKey: 
     await sql`DELETE FROM free_clips WHERE device = ${device} AND source_key = ${key} AND created_at > now() - interval '1 day'`;
     return;
   }
+  // What it really made (a resumed video can make more than its first run kept),
+  // never more than one video's share.
   await sql`
-    UPDATE free_clips SET clips = LEAST(clips, ${count})
+    UPDATE free_clips SET clips = ${Math.min(count, FREE_CLIPS_PER_VIDEO)}
     WHERE device = ${device} AND source_key = ${key} AND created_at > now() - interval '1 day'`;
 }
 
@@ -226,11 +228,22 @@ export async function signIn(sql: postgres.Sql, account: Account, device: string
   return { token: session.token, license: licenseKey, account: await summary(sql, fresh, device) };
 }
 
-/** Apply a plan (Kirvano, panel) and keep the AI key's limits in step. */
-export async function setPlan(sql: postgres.Sql, accountId: string, plan: Plan, until: Date | null) {
+/**
+ * Apply a plan (Kirvano, panel) and keep the AI key's limits in step. The Kirvano
+ * webhook passes syncLicense: false and updates the key after answering.
+ */
+export async function setPlan(
+  sql: postgres.Sql,
+  accountId: string,
+  plan: Plan,
+  until: Date | null,
+  options: { syncLicense?: boolean } = {},
+) {
   const [row] = await sql<Account[]>`
     UPDATE accounts SET plan = ${plan}, plan_until = ${plan === "lifetime" || plan === "free" ? null : until}, updated_at = now()
     WHERE id = ${accountId} RETURNING *`;
-  if (row?.license_id) await syncLicense(row.license_id, { pro: isPro(row), blocked: row.status === "blocked" }).catch(() => {});
+  if (row?.license_id && options.syncLicense !== false) {
+    await syncLicense(row.license_id, { pro: isPro(row), blocked: row.status === "blocked" }).catch(() => {});
+  }
   return row;
 }

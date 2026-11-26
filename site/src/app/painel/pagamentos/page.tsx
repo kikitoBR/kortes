@@ -8,7 +8,7 @@ export default async function PaymentsPage() {
   const rows = await sql<{ id: string; event: string; email: string; result: string; payload: unknown; created_at: Date }[]>`
     SELECT * FROM payment_events ORDER BY created_at DESC LIMIT 100`;
   const tone = (result: string) =>
-    /^plano|cancelada|assinatura vencida|mantido/.test(result) ? "ok" : /voltou ao grátis/.test(result) ? "warn" : /token|não reconheci|sem e-mail|sem conta|não configurado/.test(result) ? "danger" : "";
+    /^plano|cancelada|mantido|trocado/.test(result) ? "ok" : /voltou ao grátis|vencida/.test(result) ? "warn" : /token|não reconheci|sem e-mail|sem conta|não configurado/.test(result) ? "danger" : "";
   return (
     <Shell active="pagamentos">
       <div className="pagehead">

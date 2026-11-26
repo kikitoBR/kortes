@@ -254,3 +254,21 @@ details summary { cursor: pointer; }
 .back { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); text-decoration: none; margin-bottom: 14px; }
 .back:hover { color: var(--fg); }
 .auth-card > .button { width: 100%; min-height: 48px; border-radius: 14px; font-size: 15px; }
+
+/* Thank-you page (after the Kirvano checkout) */
+.thanks-box { width: min(560px, 100%); }
+.thanks-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; counter-reset: step; }
+.thanks-steps li { position: relative; display: grid; gap: 4px; padding: 16px 16px 16px 58px; border-radius: 16px; background: var(--bg-2); }
+.thanks-steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 16px; top: 15px; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--brand); color: #fff; display: grid; place-items: center; font: 800 14px var(--font-display); }
+.thanks-steps b { font-family: var(--font-display); font-size: 17px; letter-spacing: -0.02em; }
+.thanks-steps span { color: var(--muted); font-size: 14px; }
+.thanks-steps em { font-style: normal; font-weight: 700; color: var(--fg); }
+.thanks-download { margin-top: 10px; }
+.thanks-download .lp-dl { align-items: flex-start; margin-top: 0; }
+.thanks-download .lp-btn { display: inline-flex; align-items: center; gap: 10px; height: 50px; padding: 0 22px; border-radius: 14px; background: var(--brand); color: #fff;
+  font-weight: 700; text-decoration: none; box-shadow: 0 14px 30px -14px rgba(235, 81, 22, 0.85); }
+.thanks-download .lp-btn svg { margin: 0; color: #fff; }
+.thanks-download .lp-small { margin-top: 8px; font-size: 12px; color: var(--muted); text-align: left; }
+.alert.info { background: var(--brand-soft); color: var(--fg); align-items: center; }
+.alert.info svg { color: var(--brand); flex: none; }

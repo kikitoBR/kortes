@@ -53,7 +53,7 @@ const FAQ = [
   { q: "Como funciona o plano grátis?", a: "Você cria a conta no próprio Kortes e ganha 15 cortes, até 5 por vídeo ou live, de qualquer duração, com a marca d'água do Kortes. No vídeo vêm os 5 melhores momentos; se ele render menos, o que sobrar fica para o próximo. Para cortar sem limite, assine o Pro." },
   { q: "Comprei. Como entro no Kortes?", a: "Abra o Kortes e entre com o mesmo e-mail da compra. No primeiro acesso você cria a sua senha." },
   { q: "Posso usar em mais de um computador?", a: "Cada conta funciona em um computador. Se trocar de PC, fale com o suporte pelo botão de mensagens do app." },
-  { q: "Preciso pagar uma assinatura de IA à parte?", a: "Não. A IA que escolhe e revisa os cortes já vem na licença do Kortes: sem créditos e sem cobrança extra." },
+  { q: "Preciso pagar uma assinatura de IA à parte?", a: "Não. A IA que escolhe e revisa os cortes já vem incluída no Kortes, no plano grátis e no Pro: sem créditos e sem cobrança extra." },
   { q: "Em quais plataformas funciona?", a: "Lives da Twitch, da Kick e do YouTube enquanto estão no ar, e vídeos do YouTube ou arquivos seus de até 10 horas." },
   { q: "Roda em qual sistema?", a: "Windows 10 e 11 (64 bits). O Kortes é um programa: os vídeos são processados no seu computador." },
   { q: "E a transcrição das legendas?", a: "Usa a sua chave da AssemblyAI, se você tiver uma, ou o Whisper direto no seu PC, sem custo." },
@@ -214,7 +214,7 @@ export default async function Home() {
       <section id="baixar" className="lp-section lp-final">
         <Scissors size={72} className="lp-final-mark" />
         <h2 className="lp-h2">Corte a live <span>enquanto ela acontece.</span></h2>
-        <DownloadButton href={release.url} meta={`${meta} · a licença é ativada no primeiro uso`} />
+        <DownloadButton href={release.url} meta={meta} />
       </section>
 
       <footer className="lp-footer">

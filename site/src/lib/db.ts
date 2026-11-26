@@ -137,6 +137,9 @@ CREATE TABLE IF NOT EXISTS payment_events (
   payload jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS dedupe_key text NOT NULL DEFAULT '';
+ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS applied boolean NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS payment_events_dedupe ON payment_events (dedupe_key) WHERE applied;
 `;
 
 /** The database, with its tables created on first use (no migration step to run). */

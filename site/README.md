@@ -47,17 +47,24 @@ As tabelas são criadas sozinhas na primeira chamada (não há migração para r
 
 ## Kirvano
 
-Na Kirvano, cadastre o webhook `https://kortes.com.br/api/kirvano?token=<KIRVANO_WEBHOOK_TOKEN>` (ou o token
-no campo de token da Kirvano). Toda chamada fica em **Painel → Pagamentos**.
+Produto do tipo **Serviço** ("Kortes Pro") com três ofertas: Mensal e Anual (assinatura) e Vitalício
+(preço único). Imagens do checkout em `public/checkout/` (logo, logo branca, ícone, banner 1500×400).
 
-- Venda aprovada ou renovação: cria a conta pelo e-mail do comprador (se não existir) e soma 31 dias
-  (mensal), 366 (anual) ou libera o vitalício. Tempo já pago não se perde e o plano nunca desce
-  (vitalício continua vitalício).
-- Reembolso ou chargeback: volta ao grátis, a não ser que o reembolso seja de outro plano
-  (reembolsar um mensal antigo não tira um vitalício).
-- Assinatura vencida: o Pro acaba (3 dias de tolerância). Cancelada: vale até a data já paga.
-- O plano vem de `KIRVANO_PLANS` (id da oferta) ou do nome do produto ("mensal", "anual", "vitalício").
-  Se uma compra aparecer em Pagamentos como "não reconheci o plano", ajuste o nome ou o `KIRVANO_PLANS`.
+- **Webhook:** Integrações → Webhooks → Criar. URL `https://kortes.com.br/api/kirvano`, o token igual a
+  `KIRVANO_WEBHOOK_TOKEN` (chega no cabeçalho `Security-Token`), o produto Kortes Pro e os eventos Compra
+  aprovada, Assinatura renovada, Assinatura cancelada, Assinatura vencida, Plano da assinatura alterado,
+  Reembolso, Chargeback e Devolução.
+- **O que o site faz** (`src/app/api/kirvano/route.ts`, formato de help.kirvano.com): compra aprovada ou
+  renovação → cria a conta pelo e-mail do comprador (se não existir) e dá o Pro até `plan.next_charge_date`
+  (vitalício na compra de preço único); troca de plano → o novo plano; reembolso, chargeback ou devolução →
+  volta ao grátis (a não ser que seja de outro plano: reembolsar um mensal antigo não tira um vitalício);
+  assinatura vencida → o Pro acaba em 3 dias; cancelada → vale até a data já paga. O plano nunca desce.
+  A Kirvano não reenvia sozinha, mas o reenvio manual repete o JSON: `sale_id` + evento + número da cobrança já
+  aplicado é ignorado. A chave da IA é atualizada depois da resposta (a Kirvano espera no máximo 5 s).
+  `KIRVANO_PLANS` (`{"<offer_id>":"monthly|yearly|lifetime"}`) só é preciso se as ofertas fugirem disso.
+- **Página de obrigado:** `https://kortes.com.br/obrigado` (baixar o Kortes, entrar com o e-mail da compra,
+  criar a senha no primeiro acesso).
+- Toda chamada fica em **Painel → Pagamentos**, com o JSON e o que o site fez.
 
 ## Subir na Vercel
 
